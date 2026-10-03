@@ -34,7 +34,7 @@ All-in-one management suite for jailbroken PS5 consoles. One app — on Windows,
 
 ## 🚀 Setup (2 minutes)
 
-1. Load a jailbreak / payload loader on the PS5 (e.g. GoldHEN, or etaHEN itemzflow).
+1. Load a jailbreak / payload loader on the PS5 — tested with **etaHEN** and **Kstuff** (any payload loader that accepts ELFs works).
 2. Open the app → expand **⚙️ Payload Settings** → **📂 Browse** → pick `payload/ps5_suite_server.elf` → **📤 Send Payload** (default port 9020).
 3. The payload installs itself and starts the suite server (ports 9113–9116).
 4. Press **🔍** to auto-discover the console on your LAN, or type its IP → **🔌 Connect**.
@@ -73,7 +73,7 @@ Two side-by-side panes: your PC on the left, the PS5 on the right.
 - Downloads ask where to save on the PC; folders download recursively.
 
 **Transfer engine**
-- **📤 Upload** — parallel chunked transfers; ~**280 MB/s** on fast LANs (2.5GbE), saturates gigabit easily.
+- **📤 Upload** — parallel chunked transfers; ~**280 MB/s over Ethernet** on fast LANs (2.5GbE), saturates gigabit wired links easily. Wi-Fi will be significantly slower — use a wired connection on both PC and PS5 for full speed.
 - Duplicate files on the PS5 trigger a dialog: skip / overwrite / rename.
 - Live progress bar with per-file %, overall speed (MB/s) and ETA. **⏹ STOP** cancels cleanly.
 - **🎮 Mount Games** — mounts uploaded game dumps so they appear in the PS5's game list.
