@@ -1,0 +1,40 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PS5Upload.DuplicateFileDialog"
+        Title="Duplicate File Found"
+        Width="500" Height="280"
+        Icon="/ps5_logo.ico"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E"
+        CanResize="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="⚠️ A file with this name already exists on the PS5:"
+                   Foreground="White" FontSize="14" Margin="0,0,0,10"/>
+
+        <TextBlock Grid.Row="1" x:Name="FileNameText" Text=""
+                   Foreground="#FFD700" FontWeight="Bold" FontSize="13" Margin="0,0,0,10"/>
+
+        <StackPanel Grid.Row="2" Margin="0,0,0,15">
+            <TextBlock x:Name="LocalSizeText" Foreground="#AAAAAA" FontSize="12"/>
+            <TextBlock x:Name="RemoteSizeText" Foreground="#AAAAAA" FontSize="12"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="3" Text="What would you like to do?"
+                   Foreground="White" Margin="0,0,0,10"/>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+            <Button Content="Replace" Width="90" Click="ReplaceButton_Click"/>
+            <Button Content="Skip" Width="90" Click="SkipButton_Click"/>
+            <Button Content="Replace All" Width="100" Click="ReplaceAllButton_Click"/>
+            <Button Content="Skip All" Width="90" Click="SkipAllButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

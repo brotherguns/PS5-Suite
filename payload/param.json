@@ -1,0 +1,137 @@
+{
+  "addcont": {
+    "serviceIdForSharing": [
+      "                   ",
+      "                   ",
+      "                   ",
+      "                   ",
+      "                   ",
+      "                   ",
+      "                   "
+    ]
+  },
+  "ageLevel": {
+    "AE": 16,
+    "AR": 13,
+    "AT": 16,
+    "AU": 15,
+    "BE": 16,
+    "BG": 16,
+    "BH": 16,
+    "BO": 13,
+    "BR": 14,
+    "CA": 13,
+    "CH": 16,
+    "CL": 13,
+    "CO": 13,
+    "CR": 13,
+    "CY": 16,
+    "CZ": 16,
+    "DE": 12,
+    "DK": 16,
+    "EC": 13,
+    "ES": 16,
+    "FI": 16,
+    "FR": 16,
+    "GB": 16,
+    "GR": 16,
+    "GT": 13,
+    "HN": 13,
+    "HR": 16,
+    "HU": 16,
+    "IE": 16,
+    "IL": 16,
+    "IN": 16,
+    "IS": 16,
+    "IT": 16,
+    "JP": 15,
+    "KR": 15,
+    "KW": 16,
+    "LB": 16,
+    "LU": 16,
+    "MT": 16,
+    "MX": 13,
+    "NI": 13,
+    "NL": 16,
+    "NO": 16,
+    "NZ": 15,
+    "OM": 16,
+    "PA": 13,
+    "PE": 13,
+    "PL": 16,
+    "PT": 16,
+    "PY": 13,
+    "QA": 16,
+    "RO": 16,
+    "RU": 16,
+    "SA": 16,
+    "SE": 16,
+    "SI": 16,
+    "SK": 16,
+    "SV": 13,
+    "TR": 16,
+    "TW": 15,
+    "UA": 16,
+    "US": 13,
+    "UY": 13,
+    "ZA": 16,
+    "default": 16
+  },
+  "applicationCategoryType": 0,
+  "applicationDrmType": "standard",
+  "attribute": 0,
+  "attribute2": 0,
+  "attribute3": 4194304,
+  "conceptId": "223059",
+  "contentBadgeType": 1,
+  "contentId": "EP0700-PPSA10737_00-LITTLENIGHTMARES",
+  "contentVersion": "01.004.000",
+  "downloadDataSize": 0,
+  "gameIntent": {
+    "permittedIntents": [
+      {
+        "intentType": "launchActivity"
+      }
+    ]
+  },
+  "localizedParameters": {
+    "de-DE": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "defaultLanguage": "en-US",
+    "en-US": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "es-ES": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "fr-FR": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "it-IT": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "pl-PL": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "ru-RU": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    },
+    "sv-SE": {
+      "titleName": "Little Nightmares Enhanced Edition"
+    }
+  },
+  "masterVersion": "01.00",
+  "originContentVersion": "01.000.000",
+  "pubtools": {
+    "creationDate": "2025-11-24 11:19:04",
+    "submission": true,
+    "toolVersion": "3.13"
+  },
+  "requiredSystemSoftwareVersion": "0x1240000000000000",
+  "sdkVersion": "0x0900000000000000",
+  "targetContentVersion": "01.003.000",
+  "titleId": "PPSA10737",
+  "userDefinedParam1": 0,
+  "versionFileUri": "https://sgst.prod.dl.playstation.net/sgst/prod/00/np/PPSA10737_00/f530dd33-21e0-48c9-8816-878774f65d8d-version.xml                                                                                                                                             "
+}

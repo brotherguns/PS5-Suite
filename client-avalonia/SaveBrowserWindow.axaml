@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PS5Upload.SaveBrowserWindow"
+        Title="Mounted Save — Decrypted Contents"
+        Width="780" Height="560"
+        Background="#1E1E1E"
+        WindowStartupLocation="CenterOwner">
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="🔓 Mounted Save (decrypted)" FontSize="15" FontWeight="Bold" Foreground="#4EC9B0"/>
+            <TextBlock x:Name="PathText" Text="/data/save_mnt" FontSize="11" Foreground="#9CDCFE" Margin="0,2,0,0"/>
+        </StackPanel>
+
+        <!-- Toolbar -->
+        <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+            <Button x:Name="UpButton" Content="⬅ Up" Padding="10,5" Margin="0,0,6,0" Click="UpButton_Click"/>
+            <Button x:Name="RefreshButton" Content="🔄 Refresh" Padding="10,5" Margin="0,0,6,0" Click="RefreshButton_Click"/>
+            <Button x:Name="DownloadFileButton" Content="⬇ Download" Padding="10,5" Margin="0,0,6,0" Background="#28A745" Click="DownloadFileButton_Click"/>
+            <Button x:Name="UploadFileButton" Content="⬆ Upload" Padding="10,5" Margin="0,0,6,0" Background="#0E639C" Click="UploadFileButton_Click"/>
+            <Button x:Name="NewFolderButton" Content="📁 New Folder" Padding="10,5" Margin="0,0,6,0" Click="NewFolderButton_Click"/>
+            <Button x:Name="DeleteEntryButton" Content="🗑️ Delete" Padding="10,5" Background="#DC3545" Click="DeleteEntryButton_Click"/>
+        </WrapPanel>
+
+        <!-- File list -->
+        <ListBox Grid.Row="2" x:Name="FileListBox" Background="#252526" BorderThickness="0" DoubleTapped="FileListBox_DoubleTapped">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding IconText}" FontSize="15" Margin="4,4,8,4" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="{Binding SizeDisplay}" FontSize="11" Foreground="#9CDCFE" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <!-- Status + close -->
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" x:Name="StatusText" Text="" FontSize="11" Foreground="#888888" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="CloseStayMountedButton" Content="Close (stay mounted)" Padding="12,5" Margin="0,0,6,0" Click="CloseStayMountedButton_Click"/>
+                <Button x:Name="UnmountCloseButton" Content="🔒 Unmount &amp; Close" Padding="12,5" Background="#007ACC" Click="UnmountCloseButton_Click"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,46 @@
+# Build outputs
+bin/
+obj/
+dist/
+publish/
+publish_*/
+out/
+*.user
+*.suo
+msbuild.binlog
+
+# Release binaries (uploaded as GitHub Release assets, not tracked in git)
+release/
+*.apk
+*.aab
+PS5UploadSuite-*.exe
+PS5Upload_Standalone_*/
+
+# Runtime settings/logs (machine-local)
+ps5suite_settings.json
+ps5upload_settings.json
+ps5_favorites.json
+ps5_profiles.json
+ps5suite_*.log
+*.tmp.png
+
+# AI/tooling junk
+.aider*
+.freebuff/
+.aider.tags.cache.v4/
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# internal test/debug artifacts
+publish-*/
+payload/appdb_*.db
+payload/port9113_killer.*
+lib-prospero-pkg/test-stream/realbuild-out/
+
+# legacy clients (WPF v5/v6, old MAUI app, empty stub template)
+client/
+mobile/
+client-android/

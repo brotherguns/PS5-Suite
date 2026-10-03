@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PS5Upload.PkgPickerWindow"
+        Title="Select PKG on PS5"
+        Width="640" Height="480"
+        Icon="/ps5_logo.ico"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E">
+    <Grid Margin="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Path bar -->
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" Content="⬆ Up" Click="Up_Click" Padding="10,6"
+                    Background="#3E3E42" Margin="0,0,8,0"/>
+            <TextBox Grid.Column="1" x:Name="PathTextBox" Background="#2D2D30"
+                     BorderBrush="#3E3E42" Padding="8" Foreground="White"
+                     KeyDown="PathTextBox_KeyDown"/>
+            <Button Grid.Column="2" Content="🔄" Click="Refresh_Click" Padding="10,6"
+                    Background="#3E3E42" Margin="8,0,0,0"/>
+        </Grid>
+
+        <!-- File list -->
+        <Border Grid.Row="1" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="4">
+            <ListBox x:Name="FilesListBox" Background="#252526" Foreground="White"
+                     SelectionMode="Multiple" DoubleTapped="FilesListBox_DoubleTapped">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Icon}" Margin="0,0,8,0" Width="22"/>
+                            <TextBlock Text="{Binding Name}" Foreground="{Binding NameColor}"/>
+                            <TextBlock Text="{Binding SizeText}" Foreground="#808080" Margin="10,0,0,0"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+
+        <!-- Filter + status -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,8">
+            <CheckBox x:Name="OnlyPkgCheckBox" Content="Show only .pkg files"
+                      Foreground="#AAAAAA" IsChecked="True" IsCheckedChanged="OnlyPkg_Changed"/>
+            <TextBlock x:Name="StatusText" Foreground="#808080" Margin="20,3,0,0"/>
+        </StackPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="Select" Click="Select_Click" Padding="18,8"
+                    Background="#007ACC" FontWeight="SemiBold"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="18,8"
+                    Background="#3E3E42"/>
+        </StackPanel>
+    </Grid>
+</Window>

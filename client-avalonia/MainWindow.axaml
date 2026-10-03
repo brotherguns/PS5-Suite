@@ -1,0 +1,1215 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PS5Upload.MainWindow"
+        Title="PS5 Suite - By Manos" Height="900" Width="1600"
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
+        Icon="/ps5_logo.ico"
+        Background="#1E1E1E">
+
+    <Window.Styles>
+        <Style Selector="Button">
+            <Setter Property="Background" Value="#007ACC"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="15,8"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="Button:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#1C97EA"/>
+        </Style>
+        <Style Selector="Button:disabled /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3E3E42"/>
+        </Style>
+        <Style Selector="Button:disabled">
+            <Setter Property="Foreground" Value="#666666"/>
+        </Style>
+
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="#2D2D30"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#3E3E42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="FontSize" Value="14"/>
+        </Style>
+
+        <Style Selector="ListBox">
+            <Setter Property="Background" Value="#2D2D30"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#3E3E42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style Selector="TextBlock">
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+
+        <!-- Sidebar Navigation Button Style -->
+        <Style Selector="RadioButton.NavButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#A0A0A0"/>
+            <Setter Property="Padding" Value="15,12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}"
+                            CornerRadius="4">
+                        <ContentPresenter Content="{TemplateBinding Content}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="RadioButton.NavButton:pointerover">
+            <Setter Property="Background" Value="#3E3E42"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style Selector="RadioButton.NavButton:checked">
+            <Setter Property="Background" Value="#007ACC"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Sidebar -->
+        <Border Grid.Column="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Logo & Title -->
+                <StackPanel Grid.Row="0" Margin="15,20,15,10" HorizontalAlignment="Center">
+                    <Image Source="/ps5_logo.png" Width="60" Height="60" Margin="0,0,0,10"/>
+                    <TextBlock Text="PS5 Suite" FontSize="20" FontWeight="Bold" Foreground="#007ACC" HorizontalAlignment="Center"/>
+                    <TextBlock Text="By Manos" FontSize="11" Foreground="#666666" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+                </StackPanel>
+
+                <!-- Connection Status -->
+                <Border Grid.Row="1" Background="#2D2D30" CornerRadius="4" Margin="10,5,10,15" Padding="10">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Ellipse x:Name="ConnectionIndicator" Width="10" Height="10" Fill="#DC3545" Margin="0,0,8,0"/>
+                            <TextBlock x:Name="ConnectionStatusText" Text="Disconnected" FontSize="12" Foreground="#A0A0A0"/>
+                        </StackPanel>
+                        <TextBox x:Name="IpAddressTextBox" Text="192.168.0.160" FontSize="12" Padding="6" Margin="0,0,0,8" PlaceholderText="PS5 IP — empty = auto-discover"/>
+                        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                            <Button x:Name="ConnectButton" Grid.Column="0" Content="🔌 Connect" Click="ConnectButton_Click" HorizontalAlignment="Stretch" Padding="8,6" FontSize="12"/>
+                            <Button x:Name="AutoDetectButton" Grid.Column="1" Content="🔍" Click="AutoDetectButton_Click" Padding="10,6" Margin="6,0,0,0" ToolTip.Tip="Auto-discover PS5 on the network"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Navigation -->
+                <StackPanel Grid.Row="2" Margin="10,0">
+                    <TextBlock Text="NAVIGATION" FontSize="10" Foreground="#666666" Margin="5,0,0,8" FontWeight="Bold"/>
+                    
+                    <RadioButton x:Name="NavFiles" Classes="NavButton" GroupName="Nav" IsChecked="True" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="📁" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="File Transfer" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton x:Name="NavGames" Classes="NavButton" GroupName="Nav" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🎮" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="Games" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton x:Name="NavMedia" Classes="NavButton" GroupName="Nav" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="📷" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="Saves &amp; Media" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton x:Name="NavSystem" Classes="NavButton" GroupName="Nav" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🖥️" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="System Info" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton x:Name="NavTools" Classes="NavButton" GroupName="Nav" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🔧" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="Tools" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton x:Name="NavDebug" Classes="NavButton" GroupName="Nav" Click="NavButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="📋" FontSize="18" Margin="0,0,12,0"/>
+                            <TextBlock Text="Debug Log" VerticalAlignment="Center" FontSize="14"/>
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+
+                <!-- Bottom Actions -->
+                <StackPanel Grid.Row="3" Margin="10,10,10,15">
+                    <Button x:Name="BuyMeCoffeeButton" Background="#FFDD00" Foreground="#000000" 
+                            Click="BuyMeCoffeeButton_Click" HorizontalAlignment="Stretch" Padding="8,6" FontSize="12">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="☕" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="Buy me a coffee" FontSize="12" Foreground="#000000"/>
+                        </StackPanel>
+                    </Button>
+                    
+                    <!-- Payload Settings Expander -->
+                    <Expander Header="⚙️ Payload Settings" IsExpanded="False" Background="#2D2D30" Foreground="White" Margin="0,10,0,0">
+                        <StackPanel Margin="5">
+                            <CheckBox x:Name="AutoSendPayloadCheckBox" Content="Auto-send on startup" Foreground="White" FontSize="11" Margin="0,0,0,8" IsCheckedChanged="AutoSendPayloadCheckBox_Changed"/>
+                            <TextBox x:Name="PayloadPathTextBox" Text="" FontSize="10" Padding="4" IsReadOnly="True" Margin="0,0,0,5"/>
+                            <Button Content="📂 Browse" Click="BrowsePayloadButton_Click" FontSize="11" Padding="6,4" Margin="0,0,0,5"/>
+                            <Grid Margin="0,0,0,5">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Port:" FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBox Grid.Column="1" x:Name="PayloadPortTextBox" Text="9021" FontSize="11" Padding="4"/>
+                            </Grid>
+                            <Button x:Name="SendPayloadButton" Content="📤 Send Payload" Click="SendPayloadButton_Click" FontSize="11" Padding="6,4" Background="#28A745"/>
+                            <Button x:Name="UpdatePayloadButton" Content="🔄 Self-Update Payload" Click="UpdatePayloadButton_Click" FontSize="11" Padding="6,4" Margin="0,5,0,0" Background="#0078D4"/>
+                            <Button x:Name="CheckUpdateButton" Content="⬆️ Update from GitHub" Click="CheckUpdateButton_Click" FontSize="11" Padding="6,4" Margin="0,5,0,0" Background="#6F42C1"/>
+                            <TextBlock Text="Self-Update stages the local ELF on the PS5 and asks the running server to swap itself in. GitHub Update downloads the latest release first. Requires an active connection." FontSize="9" Foreground="#888888" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Expander>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Content Area -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Content Pages -->
+            <Grid Grid.Row="0" x:Name="ContentArea" Margin="15">
+                
+                <!-- PAGE 1: File Transfer -->
+                <Grid x:Name="PageFiles" IsVisible="True">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Storage Info Bar -->
+                    <Border Grid.Row="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="4" Padding="15" Margin="0,0,0,15" x:Name="StorageInfoPanel" IsVisible="False">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                    <TextBlock Text="Total:" Width="100" Foreground="#999999"/>
+                                    <TextBlock x:Name="TotalCapacityText" Text="---" FontWeight="Bold"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Free:" Width="100" Foreground="#999999"/>
+                                    <TextBlock x:Name="RealFreeSpaceText" Text="---" FontWeight="Bold" Foreground="#28A745"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                    <TextBlock Text="Mounted Games:" Width="110" Foreground="#999999"/>
+                                    <TextBlock x:Name="MountedGamesText" Text="---" FontWeight="Bold" Foreground="#007ACC"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="User Data:" Width="110" Foreground="#999999"/>
+                                    <TextBlock x:Name="UserDataText" Text="---" FontWeight="Bold"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                    <TextBlock Text="Reserved:" Width="80" Foreground="#999999"/>
+                                    <TextBlock x:Name="ReservedSpaceText" Text="---" FontWeight="Bold" Foreground="#FFC107"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Used:" Width="80" Foreground="#999999"/>
+                                    <TextBlock x:Name="TotalUsedText" Text="---" FontWeight="Bold" Foreground="#DC3545"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Profile Selection -->
+                    <Border Grid.Row="1" Background="#252526" CornerRadius="4" Padding="10" Margin="0,0,0,15">
+                        <WrapPanel>
+                            <TextBlock Text="Profile:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="PS5ProfileComboBox" MinWidth="150" SelectionChanged="PS5ProfileComboBox_SelectionChanged" Background="#2D2D30" Foreground="White" BorderBrush="#3E3E42" Margin="0,0,8,0"/>
+                            <Button Content="💾 Save" Click="SaveProfileButton_Click" Padding="8,4" Background="#28A745" Margin="0,0,5,0"/>
+                            <Button Content="🗑️ Delete" Click="DeleteProfileButton_Click" Padding="8,4" Background="#DC3545" Margin="0,0,15,0"/>
+                            <Button Content="🔄 Refresh Storage" Click="RefreshStorageButton_Click" Padding="8,4" Background="#007ACC"/>
+                        </WrapPanel>
+                    </Border>
+
+                    <!-- File Browser -->
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="15"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Local Files -->
+                        <Border Grid.Column="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="4">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Background="#2D2D30" Padding="10" CornerRadius="4,4,0,0">
+                                    <TextBlock Text="📁 Local Files" FontSize="14" FontWeight="SemiBold"/>
+                                </Border>
+                                <ListBox Grid.Row="1" x:Name="LocalFilesListBox" BorderThickness="0" DragDrop.AllowDrop="True">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="📦 Install on PS5 (.pkg)" Click="InstallLocalPkgMenuItem_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="🗑️ Remove from list" Click="RemoveLocalFileMenuItem_Click"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="5">
+                                                <TextBlock Text="{Binding Icon}" FontSize="16" Margin="0,0,10,0"/>
+                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <WrapPanel Grid.Row="2" Margin="10" HorizontalAlignment="Center">
+                                    <Button Content="📄 Files" Click="BrowseFilesButton_Click" Padding="10,5" Margin="0,0,5,0"/>
+                                    <Button Content="📁 Folder" Click="BrowseFolderButton_Click" Padding="10,5" Margin="0,0,5,0"/>
+                                    <Button Content="🌐 NAS" Click="AddNasPath_Click" Padding="10,5" Background="#17A2B8" Margin="0,0,5,0" ToolTip.Tip="Add network/NAS path (\\server\share)"/>
+                                    <Button Content="🗑️ Clear" Click="ClearLocalFiles_Click" Padding="10,5" Background="#DC3545"/>
+                                </WrapPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- PS5 Files -->
+                        <Border Grid.Column="2" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="4">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Background="#2D2D30" Padding="10" CornerRadius="4,4,0,0">
+                                    <TextBlock Text="🎮 PS5 Files" FontSize="14" FontWeight="SemiBold"/>
+                                </Border>
+                                <StackPanel Grid.Row="1" Margin="10" Background="#2D2D30">
+                                    <WrapPanel Margin="0,0,0,5">
+                                        <TextBlock Text="Path:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="CurrentPathTextBox" Text="/data" MinWidth="150" Margin="0,0,8,0"/>
+                                        <Button Content="Go" Click="GoButton_Click" Padding="10,5" Margin="0,0,8,0"/>
+                                        <ComboBox x:Name="FavoritesComboBox" MinWidth="100" SelectionChanged="FavoritesComboBox_SelectionChanged" Background="#2D2D30" Foreground="White" BorderBrush="#3E3E42" Margin="0,0,5,0"/>
+                                        <Button Content="⭐" Click="AddFavoriteButton_Click" Padding="6,5" Background="#28A745" Margin="0,0,3,0"/>
+                                        <Button Content="✖" Click="RemoveFavoriteButton_Click" Padding="6,5" Background="#DC3545"/>
+                                    </WrapPanel>
+                                    <WrapPanel>
+                                        <TextBlock Text="🔍" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                        <TextBox x:Name="SearchTextBox" MinWidth="150" Background="#1E1E1E" Margin="0,0,5,0"/>
+                                        <Button Content="Clear" Click="ClearSearchButton_Click" Padding="8,5" Background="#3E3E42"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                                <ListBox Grid.Row="2" x:Name="PS5FilesListBox" BorderThickness="0" SelectionMode="Multiple" DoubleTapped="PS5FilesListBox_DoubleTapped">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="⬇️ Download" Click="DownloadMenuItem_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="📝 Rename" Click="RenameMenuItem_Click"/>
+                                            <MenuItem Header="📋 Copy" Click="CopyMenuItem_Click"/>
+                                            <MenuItem Header="✂️ Move" Click="MoveMenuItem_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="🗑️ Delete" Click="DeleteMenuItem_Click"/>
+                                            <MenuItem Header="🗑️ Delete Selected" Click="DeleteSelectedMenuItem_Click"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="5">
+                                                <TextBlock Text="{Binding Icon}" FontSize="16" Margin="0,0,10,0"/>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding SizeFormatted}" FontSize="11" Foreground="#999999"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- Action Buttons (anchored bottom-right of the file page) -->
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <Button x:Name="UploadButton" Content="📤 Upload" Click="UploadButton_Click" Height="45" Width="140" FontSize="14" FontWeight="SemiBold" Background="#007ACC" IsEnabled="False" Margin="0,0,10,0"/>
+                        <Button x:Name="MountGamesButton" Content="🎮 Mount Games" Click="MountGamesButton_Click" Height="45" Width="160" FontSize="14" FontWeight="SemiBold" Background="#28A745" IsEnabled="False"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- PAGE 2: Games -->
+                <Grid x:Name="PageGames" IsVisible="False">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Background="#252526" CornerRadius="4" Padding="12" Margin="0,0,0,15">
+                        <WrapPanel>
+                            <TextBlock Text="🎮 Games" FontSize="16" FontWeight="Bold" Foreground="#007ACC" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                            <TextBlock x:Name="GameCountText" Text="(0 games)" FontSize="12" Foreground="#999999" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                            <Button x:Name="RefreshGameListButton" Content="🔄 Refresh" Click="RefreshGameListButton_Click" Padding="10,5" Margin="0,0,8,0"/>
+                            <Button x:Name="MountGamesFromListButton" Content="📥 Mount All" Click="MountGamesButton_Click" Padding="10,5" Background="#28A745"/>
+                        </WrapPanel>
+                    </Border>
+
+                    <ListBox Grid.Row="1" x:Name="MountedGamesListBox" Background="#1E1E1E" BorderThickness="0" DoubleTapped="MountedGamesListBox_DoubleTapped">
+                        <ListBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="▶ Launch Game" Click="LaunchGameMenuItem_Click"/>
+                                <MenuItem Header="ℹ️ View Details" Click="ViewGameDetailsMenuItem_Click"/>
+                                <MenuItem Header="📥 Mount Game" Click="MountGameMenuItem_Click"/>
+                                <MenuItem Header="🗑️ Unmount Game" Click="UnmountGameMenuItem_Click"/>
+                                <MenuItem Header="📂 Open Path" Click="OpenGamePathMenuItem_Click"/>
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#2D2D30" CornerRadius="6" Padding="12" Margin="3">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Grid.Column="0" Width="80" Height="80" Margin="0,0,15,0">
+                                            <Border Background="#3E3E42" CornerRadius="8">
+                                                <TextBlock Text="🎮" FontSize="36" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <Border CornerRadius="8" ClipToBounds="True">
+                                                <Image Source="{Binding Icon}" Stretch="UniformToFill"/>
+                                            </Border>
+                                        </Grid>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="Bold"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                                <TextBlock Text="{Binding TitleId}" FontSize="13" Foreground="#007ACC" FontWeight="SemiBold"/>
+                                                <TextBlock Text=" • " Foreground="#666666"/>
+                                                <TextBlock Text="{Binding Region}" FontSize="13" Foreground="#FFC107"/>
+                                                <TextBlock Text=" • " Foreground="#666666"/>
+                                                <TextBlock Text="{Binding SizeDisplay}" FontSize="13" Foreground="#9CDCFE"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Path}" FontSize="11" Foreground="#666666" Margin="0,5,0,0"/>
+                                        </StackPanel>
+                                        <Border Grid.Column="2" Background="{Binding StatusBrush}" CornerRadius="12" Padding="12,6" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding StatusDisplay}" FontSize="12" Foreground="White" FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+
+                <!-- PAGE 3: Saves & Media -->
+                <Grid x:Name="PageMedia" IsVisible="False">
+                    <TabControl Background="#1E1E1E">
+                        <!-- Saves Tab -->
+                        <TabItem Header="💾 Saves">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Background="#252526" CornerRadius="4" Padding="12" Margin="10,10,10,10">
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <TextBlock Text="💾 PS5 Save Games" FontSize="14" FontWeight="Bold" Foreground="#007ACC" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <TextBlock x:Name="SaveCountText" Text="(0 saves)" FontSize="12" Foreground="#999999" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                                            <Button x:Name="RefreshSavesButton" Content="🔄 Refresh" Click="RefreshSavesButton_Click" Padding="8,4" Margin="0,0,5,0"/>
+                                            <Button x:Name="MountSaveButton" Content="🔓 Mount" Click="MountSaveButton_Click" Padding="8,4" Background="#4EC9B0" Foreground="#1E1E1E" Margin="0,0,5,0"/>
+                                            <Button x:Name="BrowseSaveButton" Content="📂 Browse" Click="BrowseSaveButton_Click" Padding="8,4" Margin="0,0,5,0"/>
+                                            <Button x:Name="UnmountSaveButton" Content="🔒 Unmount" Click="UnmountSaveButton_Click" Padding="8,4" Background="#C586C0" Foreground="#1E1E1E" Margin="0,0,5,0"/>
+                                            <Button Content="📥 Backup" Click="BackupSaveButton_Click" Padding="8,4" Background="#28A745" Margin="0,0,5,0"/>
+                                            <Button Content="📤 Restore" Click="RestoreSaveButton_Click" Padding="8,4" Background="#FFC107" Foreground="#1E1E1E" Margin="0,0,5,0"/>
+                                            <Button Content="🗑️ Delete" Click="DeleteSaveButton_Click" Padding="8,4" Background="#DC3545"/>
+                                        </WrapPanel>
+                                        <TextBlock x:Name="SaveMountStatusText" Text="" FontSize="11" Foreground="#4EC9B0" Margin="0,8,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                <ListBox Grid.Row="1" x:Name="SavesListBox" Background="#1E1E1E" BorderThickness="0" Margin="10,0,10,10">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="🔓 Mount (decrypt)" Click="MountSaveMenuItem_Click"/>
+                                            <MenuItem Header="📂 Browse mounted" Click="BrowseSaveButton_Click"/>
+                                            <MenuItem Header="🔒 Unmount &amp; save" Click="UnmountSaveButton_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="📥 Backup (decrypted)" Click="BackupSaveMenuItem_Click"/>
+                                            <MenuItem Header="📥 Backup (raw image)" Click="BackupSaveRawMenuItem_Click"/>
+                                            <MenuItem Header="📤 Restore (decrypted)" Click="RestoreSaveMenuItem_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="🗑️ Delete save" Click="DeleteSaveMenuItem_Click"/>
+                                            <MenuItem Header="📂 Copy path" Click="CopySavePathMenuItem_Click"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#2D2D30" CornerRadius="4" Padding="10" Margin="2">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid Grid.Column="0" Width="48" Height="48" Margin="0,0,12,0">
+                                                        <Border Background="#3E3E42" CornerRadius="6">
+                                                            <TextBlock Text="💾" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        </Border>
+                                                        <Border CornerRadius="6" ClipToBounds="True">
+                                                            <Image Source="{Binding Icon}" Stretch="UniformToFill"/>
+                                                        </Border>
+                                                    </Grid>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding GameName}" FontSize="13" FontWeight="Bold"/>
+                                                            <TextBlock Text="  •  " Foreground="#666666" FontSize="13"/>
+                                                            <TextBlock Text="{Binding SaveName}" FontSize="13" Foreground="#DCDCAA"/>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                            <TextBlock Text="{Binding TitleId}" FontSize="11" Foreground="#007ACC" FontWeight="SemiBold"/>
+                                                            <TextBlock Text=" • " Foreground="#666666" FontSize="11"/>
+                                                            <TextBlock Text="{Binding SizeDisplay}" FontSize="11" Foreground="#9CDCFE"/>
+                                                            <TextBlock Text=" • user " Foreground="#666666" FontSize="11"/>
+                                                            <TextBlock Text="{Binding ShortUserId}" FontSize="11" Foreground="#888888"/>
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding Path}" FontSize="10" Foreground="#666666" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                    <Border Grid.Column="2" Background="{Binding TypeBadgeColor}" CornerRadius="10" Padding="8,4" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding TypeBadge}" FontSize="10" FontWeight="Bold"/>
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Screenshots Tab -->
+                        <TabItem Header="📷 Screenshots">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <WrapPanel Grid.Row="0" Margin="10,10,10,10">
+                                    <TextBlock Text="📷 PS5 Screenshots" FontWeight="Bold" Foreground="#0E9CFF" FontSize="14" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                                    <TextBlock x:Name="ScreenshotsCountText" Text="(0 items)" Foreground="#A0A0A0" FontSize="12" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                                    <Button Content="🔄 Refresh" Padding="8,4" Background="#0E639C" Margin="0,0,5,0" Click="RefreshScreenshotsButton_Click"/>
+                                    <Button Content="⬇ Download" Padding="8,4" Background="#28A745" Margin="0,0,5,0" Click="DownloadScreenshotButton_Click"/>
+                                    <Button Content="🗑️ Delete" Padding="8,4" Background="#DC3545" Click="DeleteScreenshotButton_Click"/>
+                                </WrapPanel>
+                                <ListBox Grid.Row="1" x:Name="ScreenshotsListBox" Background="#1E1E1E" BorderThickness="0" Margin="10,0,10,10" SelectionMode="Multiple" DoubleTapped="ScreenshotsListBox_DoubleTapped">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="⬇ Download" Click="DownloadScreenshotButton_Click"/>
+                                            <MenuItem Header="📋 Copy Path" Click="CopyScreenshotPathMenuItem_Click"/>
+                                            <MenuItem Header="🗑️ Delete" Click="DeleteScreenshotButton_Click"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#2D2D30" CornerRadius="4" Padding="10" Margin="2">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid Grid.Column="0" Width="72" Height="48" Margin="0,0,12,0">
+                                                        <Border Background="#3E3E42" CornerRadius="6">
+                                                            <TextBlock Text="🖼️" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        </Border>
+                                                        <Border CornerRadius="6" ClipToBounds="True">
+                                                            <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"/>
+                                                        </Border>
+                                                    </Grid>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding FileName}" FontWeight="Bold" FontSize="13"/>
+                                                        <TextBlock Text="{Binding FullPath}" FontSize="10" Foreground="#808080" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                                        <TextBlock Text="{Binding SizeDisplay}" FontSize="11" Foreground="#0E9CFF" HorizontalAlignment="Right"/>
+                                                        <TextBlock Text="{Binding DateDisplay}" FontSize="10" Foreground="#A0A0A0" HorizontalAlignment="Right" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+
+                <!-- PAGE 4: System Info -->
+                <ScrollViewer x:Name="PageSystem" IsVisible="False">
+                    <StackPanel Margin="0,0,0,15">
+                        <!-- Header -->
+                        <WrapPanel Margin="0,0,0,15">
+                            <TextBlock Text="🖥️ PS5 System Monitor" FontWeight="Bold" Foreground="#0E9CFF" FontSize="18" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                            <TextBlock x:Name="HwLiveText" Text="● LIVE" Foreground="#28A745" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"/>
+                        </WrapPanel>
+
+                        <!-- Row 1: System Info + Extended Info -->
+                        <Grid Margin="0,0,0,15">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="15"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- System Info Card -->
+                            <Border Grid.Column="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                <StackPanel>
+                                    <TextBlock Text="📋 System Information" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Model:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="HwModelText" Text="—" FontWeight="SemiBold" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Serial:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HwSerialText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Architecture:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="HwMachineText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="OS:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="HwOsText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="CPU Cores:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="HwCpuCoresText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Physical RAM:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="HwPhysMemText" Text="—" Margin="0,3"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Extended Info Card -->
+                            <Border Grid.Column="2" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                <StackPanel>
+                                    <TextBlock Text="🔧 Extended Info" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="130"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Firmware:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="HwFirmwareText" Text="—" FontWeight="SemiBold" Foreground="#28A745" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Product Code:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HwProductCodeText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Uptime (this boot):" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="HwTotalUptimeText" Text="—" Foreground="#FFC107" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Power Cycles:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="HwBootCountText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="BD Drive:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="HwBdDriveText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Thermal Alert:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="HwThermalAlertText" Text="—" Margin="0,3"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- Row 2: Live Sensors -->
+                        <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                            <StackPanel>
+                                <TextBlock Text="🌡️ Live Sensors" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="🔥 CPU Temp" Foreground="#808080" FontSize="12"/>
+                                            <TextBlock x:Name="HwCpuTempText" Text="—°C" Foreground="#FFA500" FontWeight="Bold" FontSize="14" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                        <ProgressBar x:Name="HwCpuTempBar" Height="16" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#FF6B35"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="10,0">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="🌡️ SoC Temp" Foreground="#808080" FontSize="12"/>
+                                            <TextBlock x:Name="HwSocTempText" Text="—°C" Foreground="#FFA500" FontWeight="Bold" FontSize="14" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                        <ProgressBar x:Name="HwSocTempBar" Height="16" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#FF6B35"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Margin="10,0">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="⚡ CPU Freq" Foreground="#808080" FontSize="12"/>
+                                            <TextBlock x:Name="HwCpuFreqText" Text="— MHz" Foreground="#0E9CFF" FontWeight="Bold" FontSize="14" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                        <ProgressBar x:Name="HwCpuFreqBar" Height="16" Minimum="0" Maximum="3500" Value="0" Background="#1E1E1E" Foreground="#0E9CFF"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="3" Margin="10,0,0,0">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="🔋 Power" Foreground="#808080" FontSize="12"/>
+                                            <TextBlock x:Name="HwSocPowerText" Text="— W" Foreground="#2D7D2D" FontWeight="Bold" FontSize="14" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                        <ProgressBar x:Name="HwSocPowerBar" Height="16" Minimum="0" Maximum="250" Value="0" Background="#1E1E1E" Foreground="#2D7D2D"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Row 3: CPU Usage + Memory -->
+                        <Grid Margin="0,0,0,15">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="15"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- CPU Usage Card -->
+                            <Border Grid.Column="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                <StackPanel>
+                                    <TextBlock Text="📊 CPU Usage (per core)" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 0:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu0Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu0Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 1:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu1Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu1Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 2:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu2Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu2Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 3:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu3Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu3Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 4:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu4Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu4Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 5:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu5Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu5Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 6:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu6Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu6Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <TextBlock Text="Core 7:" Foreground="#808080" Width="50" FontSize="11"/>
+                                                <TextBlock x:Name="HwCpu7Text" Text="—%" Foreground="#9CDCFE" FontSize="11" Width="35"/>
+                                                <ProgressBar x:Name="HwCpu7Bar" Height="12" Width="80" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Border Background="#1E1E1E" CornerRadius="4" Padding="8" Margin="0,10,0,0">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="Average:" Foreground="#808080" FontSize="12"/>
+                                            <TextBlock x:Name="HwCpuAvgText" Text="—%" Foreground="#28A745" FontWeight="Bold" FontSize="14" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Memory Card -->
+                            <Border Grid.Column="2" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                <StackPanel>
+                                    <TextBlock Text="💾 Memory Usage" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="130"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Total RAM:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="HwMemDirectTotalText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="RAM Used:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="HwMemDirectAvailText" Text="—" Foreground="#28A745" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="RAM Free:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="HwMemDirectUsedText" Text="—" Foreground="#FFC107" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Flexible Avail:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="HwMemFlexibleText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="GPU Pool Free:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="HwMemFreeText" Text="—" Foreground="#28A745" Margin="0,3"/>
+                                    </Grid>
+                                    <StackPanel Margin="0,12,0,0">
+                                        <TextBlock Text="RAM Usage" Foreground="#808080" FontSize="11" Margin="0,0,0,4"/>
+                                        <Grid>
+                                            <ProgressBar x:Name="HwMemUsageBar" Height="20" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC"/>
+                                            <TextBlock x:Name="HwMemUsageText" Text="—%" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- Row 4: Loaded Modules -->
+                        <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <TextBlock Text="📦 Loaded Modules" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF"/>
+                                    <TextBlock x:Name="HwModuleCountText" Text=" (0)" Foreground="#808080" FontSize="14"/>
+                                    <Button Content="🔄 Load" Padding="6,2" Background="#3E3E42" FontSize="11" Margin="15,0,0,0" Click="LoadModulesButton_Click"/>
+                                </StackPanel>
+                                <ListBox x:Name="ModulesListBox" Background="#1E1E1E" BorderThickness="0" MaxHeight="150" FontFamily="Consolas" FontSize="11">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Name}" Foreground="#9CDCFE"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock x:Name="HwStatusText" Foreground="#707070" FontSize="11" HorizontalAlignment="Right" Text="Not loaded yet — click Refresh"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- PAGE 5: Tools -->
+                <Grid x:Name="PageTools" IsVisible="False">
+                    <TabControl Background="#1E1E1E">
+                        <!-- Shell Tab -->
+                        <TabItem Header="💻 Shell">
+                            <Grid Background="#0D0D0D">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="PS5 Shell Terminal - Ready&#x0a;Type 'help' for available commands" FontFamily="Consolas" FontSize="11" Foreground="#28A745" Background="#0D0D0D" Padding="10"/>
+                                <ListBox Grid.Row="1" x:Name="ShellOutputListBox" FontFamily="Consolas" FontSize="11" Foreground="#CCCCCC" Background="#0D0D0D" BorderThickness="0" Padding="10"/>
+                                <TextBox Grid.Row="2" x:Name="ShellCommandInput" FontFamily="Consolas" FontSize="11" Foreground="White" Background="#2D2D30" BorderBrush="#3E3E42" BorderThickness="0,1,0,0" Padding="10" KeyDown="ShellCommandInput_KeyDown"/>
+                                <WrapPanel Grid.Row="3" Margin="10" HorizontalAlignment="Center">
+                                    <Button Content="🗑️ Clear" Click="ClearShellButton_Click" Padding="8,5" Margin="0,0,5,0" Background="#007ACC"/>
+                                    <Button Content="💾 Save Log" Click="SaveShellLogButton_Click" Padding="8,5" Background="#28A745"/>
+                                </WrapPanel>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Search Tab -->
+                        <TabItem Header="🔍 Search">
+                            <Grid Background="#1E1E1E">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Background="#2D2D30" Padding="10" Margin="10,10,10,5">
+                                    <StackPanel>
+                                        <TextBlock x:Name="IndexStatusText" Text="Index Status: Not started" Margin="0,0,0,10"/>
+                                        <WrapPanel>
+                                            <Button x:Name="StartIndexButton" Content="🔄 Start Index" Click="StartIndexButton_Click" Padding="8,5" Margin="0,0,5,0" Background="#007ACC"/>
+                                            <Button x:Name="RefreshIndexButton" Content="🔃 Refresh" Click="RefreshIndexButton_Click" Padding="8,5" Background="#3E3E42"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Grid Grid.Row="1" Margin="10,5,10,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" x:Name="SearchInputBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="10" KeyDown="SearchInputBox_KeyDown"/>
+                                    <Button Grid.Column="1" Content="🗑️ Clear" Click="ClearIndexSearchButton_Click" Margin="10,0,0,0" Background="#3E3E42"/>
+                                </Grid>
+                                <DataGrid Grid.Row="2" x:Name="SearchResultsGrid" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42" BorderThickness="1" Margin="10,0,10,10" AutoGenerateColumns="False" HeadersVisibility="Column" GridLinesVisibility="None" IsReadOnly="True" DoubleTapped="SearchResultsGrid_DoubleTapped">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Name" Width="*" Binding="{Binding Name}"/>
+                                        <DataGridTextColumn Header="Path" Width="2*" Binding="{Binding Path}"/>
+                                        <DataGridTextColumn Header="Size" Width="100" Binding="{Binding SizeText}"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Fan Control Tab -->
+                        <TabItem Header="🌀 Fan Control">
+                            <Grid Background="#1E1E1E" Margin="15">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <TextBlock Grid.Row="0" Text="🌀 PS5 Fan Temperature Threshold" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                
+                                <Border Grid.Row="1" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                    <StackPanel>
+                                        <TextBlock Text="Current Threshold:" Foreground="#808080" Margin="0,0,0,5"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock x:Name="FanCurrentThresholdText" Text="—" FontSize="32" FontWeight="Bold" Foreground="#FFA500"/>
+                                            <TextBlock Text="°C" FontSize="24" Foreground="#808080" VerticalAlignment="Bottom" Margin="5,0,0,5"/>
+                                        </StackPanel>
+                                        <Button Content="🔄 Refresh" Click="RefreshFanThreshold_Click" Padding="10,5" Background="#3E3E42" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <Border Grid.Row="2" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                    <StackPanel>
+                                        <TextBlock Text="Set New Threshold (30-90°C):" Foreground="#808080" Margin="0,0,0,10"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <Slider x:Name="FanThresholdSlider" Minimum="30" Maximum="90" Value="60" Width="300" VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="FanSliderValueText" Text="60°C" FontSize="18" FontWeight="Bold" Foreground="#28A745" Margin="15,0,0,0" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="🌡️ Set Threshold" Click="SetFanThreshold_Click" Padding="15,8" Background="#007ACC" FontWeight="SemiBold"/>
+                                            <Button Content="❄️ Cool (50°C)" Click="FanCool_Click" Padding="10,8" Background="#17A2B8" Margin="10,0,0,0"/>
+                                            <Button Content="⚖️ Balanced (60°C)" Click="FanBalanced_Click" Padding="10,8" Background="#28A745" Margin="10,0,0,0"/>
+                                            <Button Content="🔇 Quiet (70°C)" Click="FanQuiet_Click" Padding="10,8" Background="#FFC107" Foreground="#1E1E1E" Margin="10,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Text="⚠️ Lower = cooler but louder fan. Higher = quieter but warmer." Foreground="#707070" FontSize="11" Margin="0,15,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Memory Editor Tab -->
+                        <TabItem Header="🧠 Memory">
+                            <Grid Background="#1E1E1E" Margin="15">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="300"/>
+                                    <ColumnDefinition Width="15"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Left: process + regions -->
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Text="🧠 Memory Editor" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,10"/>
+                                    <StackPanel Grid.Row="1" Margin="0,0,0,5">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                            <TextBox x:Name="MemProcessFilter" PlaceholderText="Filter processes..." Background="#2D2D30" Padding="6" Width="200" KeyUp="MemProcessFilter_KeyUp"/>
+                                            <Button Content="↻" Click="MemRefreshProcesses_Click" Padding="8,5" Margin="8,0,0,0" Background="#3E3E42" ToolTip.Tip="Refresh process list"/>
+                                        </StackPanel>
+                                        <ListBox x:Name="MemProcessList" Height="150" FontFamily="Consolas" FontSize="11" Background="#252526" SelectionChanged="MemProcessList_SelectionChanged"/>
+                                    </StackPanel>
+                                    <ListBox Grid.Row="2" x:Name="MemRegionsList" FontFamily="Consolas" FontSize="10" Background="#252526" SelectionChanged="MemRegionsList_SelectionChanged"/>
+                                </Grid>
+
+                                <!-- Right: search + results + view/edit -->
+                                <Grid Grid.Column="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Search row -->
+                                    <Border Grid.Row="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+                                        <WrapPanel>
+                                            <ComboBox x:Name="MemValueType" Width="90" Margin="0,0,8,0">
+                                                <ComboBoxItem IsSelected="True">u32</ComboBoxItem>
+                                                <ComboBoxItem>u8</ComboBoxItem>
+                                                <ComboBoxItem>u16</ComboBoxItem>
+                                                <ComboBoxItem>u64</ComboBoxItem>
+                                                <ComboBoxItem>float</ComboBoxItem>
+                                                <ComboBoxItem>bytes</ComboBoxItem>
+                                            </ComboBox>
+                                            <TextBox x:Name="MemValueInput" PlaceholderText="Value (dec / 0xhex / hexbytes)" Width="180" Background="#2D2D30" Padding="6" Margin="0,0,8,0"/>
+                                            <TextBox x:Name="MemScanStart" PlaceholderText="start (auto from region)" Width="150" Background="#2D2D30" Padding="6" Margin="0,0,8,0" FontFamily="Consolas"/>
+                                            <TextBox x:Name="MemScanEnd" PlaceholderText="end" Width="150" Background="#2D2D30" Padding="6" Margin="0,0,8,0" FontFamily="Consolas"/>
+                                            <Button x:Name="MemFirstScanButton" Content="🔍 First Scan" Click="MemFirstScan_Click" Padding="10,5" Background="#007ACC" Margin="0,0,8,0"/>
+                                            <Button x:Name="MemNextScanButton" Content="🔎 Next Scan" Click="MemNextScan_Click" Padding="10,5" Background="#6F42C1" IsEnabled="False"/>
+                                        </WrapPanel>
+                                    </Border>
+
+                                    <!-- Results -->
+                                    <TextBlock Grid.Row="1" x:Name="MemStatus" Text="Select a process on the left" Foreground="#808080" Margin="0,0,0,6"/>
+                                    <ListBox Grid.Row="2" x:Name="MemResultsList" FontFamily="Consolas" FontSize="11" Background="#252526" SelectionChanged="MemResultsList_SelectionChanged"/>
+
+                                    <!-- View / edit -->
+                                    <Border Grid.Row="3" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,10,0,0">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+                                                <TextBox x:Name="MemAddrInput" PlaceholderText="address (0x…)" Width="170" Background="#2D2D30" Padding="6" FontFamily="Consolas" Margin="0,0,8,0"/>
+                                                <Button Content="📖 Read 256B" Click="MemRead_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
+                                                <TextBox x:Name="MemWriteHex" PlaceholderText="hex bytes to write (e.g. E8030000)" Width="260" Background="#2D2D30" Padding="6" FontFamily="Consolas" Margin="0,0,8,0"/>
+                                                <Button Content="✏️ Write" Click="MemWrite_Click" Padding="10,5" Background="#28A745"/>
+                                            </WrapPanel>
+                                            <TextBox Grid.Row="1" x:Name="MemDumpText" FontFamily="Consolas" FontSize="10" Background="#1B1B1C" Foreground="#CCCCCC" IsReadOnly="True" Height="150" TextWrapping="NoWrap" AcceptsReturn="True"/>
+                                            <TextBlock Grid.Row="2" Text="⚠️ Writing to a live process can crash it. Attach pauses the target briefly — games may stutter during scans." Foreground="#8A6D00" FontSize="11" Margin="0,8,0,0"/>
+                                        </Grid>
+                                    </Border>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Kernel Log Tab -->
+                        <TabItem Header="🧾 Kernel Log">
+                            <Grid Background="#1E1E1E" Margin="15">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="🧾 Kernel Message Buffer (dmesg)" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,10"/>
+                                <WrapPanel Grid.Row="1" Margin="0,0,0,10">
+                                    <Button Content="🔄 Refresh" Click="KlogRefresh_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="KlogAutoRefresh" Content="Auto (3s)" Foreground="#CCCCCC" Margin="0,0,10,0" VerticalAlignment="Center" IsCheckedChanged="KlogAutoRefresh_Changed"/>
+                                    <ComboBox x:Name="KlogTailSelect" Width="120" SelectedIndex="0" Margin="0,0,8,0">
+                                        <ComboBoxItem Content="Last 32 KB"/>
+                                        <ComboBoxItem Content="Last 128 KB"/>
+                                        <ComboBoxItem Content="Full buffer"/>
+                                    </ComboBox>
+                                    <Button Content="📋 Copy" Click="KlogCopy_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
+                                    <Button Content="💾 Save…" Click="KlogSave_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
+                                    <TextBlock x:Name="KlogStatus" Foreground="#808080" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </WrapPanel>
+                                <TextBox Grid.Row="2" x:Name="KlogText" FontFamily="Consolas" FontSize="11" Background="#141414" Foreground="#CCCCCC" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" PlaceholderText="press Refresh — reads kern.msgbuf"/>
+                                <TextBlock Grid.Row="3" Text="Kernel ring buffer via sysctl kern.msgbuf — kernel printf / dmesg output." Foreground="#606060" FontSize="11" Margin="0,6,0,0"/>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- PKG Install & Convert Tab -->
+                        <TabItem Header="📦 PKG">
+                            <Grid Background="#1E1E1E" Margin="15">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <TextBlock Grid.Row="0" Text="📦 Install PKG Package" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                
+                                <Border Grid.Row="1" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                    <StackPanel>
+                                        <TextBlock Text="PKG path(s) — PS5 path, HTTP URL, or local PC file (';' separates multiple):" Foreground="#808080" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="PkgPathTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="10" Margin="0,0,0,10" Text="/user/data/pkg/"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="📦 Install PKG" Click="InstallPkg_Click" Padding="15,8" Background="#007ACC" FontWeight="SemiBold"/>
+                                            <Button Content="📋 Browse PS5" Click="BrowsePkgPath_Click" Padding="10,8" Background="#3E3E42" Margin="10,0,0,0"/>
+                                            <Button Content="💻 Browse PC" Click="BrowsePcPkg_Click" Padding="10,8" Background="#3E3E42" Margin="10,0,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <Border Grid.Row="2" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15">
+                                    <StackPanel>
+                                        <TextBlock Text="Install Status:" Foreground="#808080" Margin="0,0,0,10"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock x:Name="PkgInstallStatusText" Text="Idle" FontSize="16" FontWeight="SemiBold" Foreground="#28A745"/>
+                                        </StackPanel>
+                                        <ProgressBar x:Name="PkgInstallProgressBar" Height="20" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#007ACC" Margin="0,0,0,10"/>
+                                        <Button Content="🔄 Check Status" Click="CheckPkgStatus_Click" Padding="10,5" Background="#3E3E42" HorizontalAlignment="Left"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Convert to FPKG Section -->
+                                <Border Grid.Row="3" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,15,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="🔄 Convert to FPKG" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                        
+                                        <TextBlock Text="Source folder (decrypted game):" Foreground="#808080" Margin="0,0,0,5"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBox x:Name="FpkgSourcePathTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="10" MinWidth="300" IsReadOnly="True"/>
+                                            <Button Content="📁 Browse" Click="BrowseFpkgSource_Click" Padding="10,5" Background="#3E3E42" Margin="10,0,0,0"/>
+                                        </StackPanel>
+                                        
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                <TextBlock Text="Content ID:" Foreground="#808080" Margin="0,0,0,5"/>
+                                                <TextBox x:Name="FpkgContentIdTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="8" Text="UP9000-PPSA00000_00-HOMEBREW00000000"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Title ID:" Foreground="#808080" Margin="0,0,0,5"/>
+                                                <TextBox x:Name="FpkgTitleIdTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="8" Text="PPSA00000"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                <TextBlock Text="Title:" Foreground="#808080" Margin="0,0,0,5"/>
+                                                <TextBox x:Name="FpkgTitleTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="8" Text="Homebrew App"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Version:" Foreground="#808080" Margin="0,0,0,5"/>
+                                                <TextBox x:Name="FpkgVersionTextBox" Background="#2D2D30" BorderBrush="#3E3E42" Padding="8" Text="01.00"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        
+                                        <CheckBox x:Name="FpkgFakeSignCheckBox" Content="Fake-sign ELF modules (eboot.bin, *.elf, *.prx, *.sprx)" Foreground="#CCCCCC" IsChecked="True" Margin="0,0,0,10"/>
+                                        
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button x:Name="ConvertFpkgButton" Content="🔄 Convert to FPKG" Click="ConvertFpkg_Click" Padding="15,8" Background="#28A745" FontWeight="SemiBold"/>
+                                        </StackPanel>
+                                        
+                                        <TextBlock x:Name="FpkgStatusText" Text="" Foreground="#808080" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                        <ProgressBar x:Name="FpkgProgressBar" Height="16" Minimum="0" Maximum="100" Value="0" Background="#1E1E1E" Foreground="#17A2B8" Margin="0,5,0,0" IsVisible="False"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+
+                <!-- PAGE 6: Debug Log -->
+                <Grid x:Name="PageDebug" IsVisible="False">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Transfer History -->
+                    <Expander Grid.Row="0" Header="📊 Transfer History" IsExpanded="False" Background="#252526" Foreground="White" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Expander Grid.Row="0" Header="✅ Completed" IsExpanded="True" Background="#2D2D30" Foreground="White" Margin="10,10,10,5">
+                                <ListBox x:Name="CompletedTransfersListBox" Background="#1E1E1E" BorderThickness="0" MaxHeight="150" Margin="5"/>
+                            </Expander>
+                            <Expander Grid.Row="1" Header="❌ Failed" IsExpanded="True" Background="#2D2D30" Foreground="White" Margin="10,5,10,10">
+                                <ListBox x:Name="FailedTransfersListBox" Background="#1E1E1E" BorderThickness="0" MaxHeight="150" Margin="5">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="🔄 Retry" Click="RetryFailedUpload_Click"/>
+                                            <MenuItem Header="🗑️ Remove" Click="RemoveFailedTransfer_Click"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                </ListBox>
+                            </Expander>
+                            <Button Grid.Row="2" Content="🗑️ Clear All" Click="ClearTransferHistory_Click" Padding="8,5" Background="#DC3545" HorizontalAlignment="Center" Margin="10"/>
+                        </Grid>
+                    </Expander>
+
+                    <!-- Debug Log -->
+                    <TextBox Grid.Row="1" x:Name="LogTextBox" Text="" FontFamily="Consolas" FontSize="11" Foreground="#CCCCCC" Background="#1E1E1E" BorderThickness="0" Padding="10" TextWrapping="Wrap" IsReadOnly="True" AcceptsReturn="True"/>
+
+                    <WrapPanel Grid.Row="2" Margin="10" HorizontalAlignment="Center">
+                        <Button Content="📋 Copy Log" Click="CopyLogButton_Click" Padding="8,5" Margin="0,0,5,0" Background="#28A745"/>
+                        <Button Content="🗑️ Clear Log" Click="ClearLogButton_Click" Padding="8,5" Background="#3E3E42"/>
+                    </WrapPanel>
+                </Grid>
+            </Grid>
+
+            <!-- Bottom Progress Bar (visible during uploads) -->
+            <Border Grid.Row="1" Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="4" Padding="15" Margin="15,0,15,15" x:Name="ProgressPanel" IsVisible="False">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" x:Name="FilesRemainingText" Text="Files: 0 / 0" FontSize="13" FontWeight="SemiBold" Foreground="#FFC107" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" x:Name="TotalProgressText" Text="Total: 0 / 0 files" FontSize="14" FontWeight="SemiBold" Foreground="#28A745" Margin="0,0,0,5"/>
+                    <ProgressBar Grid.Row="2" Grid.Column="0" x:Name="TotalProgressBar" Height="20" Minimum="0" Maximum="100" Value="0" Foreground="#17A2B8" Background="#2D2D30" Margin="0,0,10,10"/>
+                    <Button Grid.Row="2" Grid.Column="1" x:Name="CancelButton" Content="⏹ STOP" Click="CancelButton_Click" IsEnabled="False" Padding="22,8" MinWidth="110" FontSize="14" FontWeight="Bold" Foreground="White" Background="#DC3545" BorderBrush="#FF6B6B" BorderThickness="1"/>
+                    <TextBlock Grid.Row="3" Grid.ColumnSpan="2" x:Name="UploadFileNameText" Text="Uploading..." FontSize="13" Margin="0,0,0,5"/>
+                    <ProgressBar Grid.Row="4" Grid.ColumnSpan="2" x:Name="UploadProgressBar" Height="20" Minimum="0" Maximum="100" Value="0" Foreground="#28A745" Background="#2D2D30"/>
+                    <Grid Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="UploadSpeedText" Text="Speed: 0 MB/s" FontSize="12" Foreground="#999999"/>
+                        <TextBlock Grid.Column="1" x:Name="UploadProgressText" Text="0 / 0 MB (0%)" FontSize="12" Foreground="#999999"/>
+                    </Grid>
+                    <TextBlock Grid.Row="6" Grid.ColumnSpan="2" x:Name="UploadETAText" Text="ETA: Calculating..." FontSize="12" Foreground="#999999" Margin="0,5,0,0"/>
+                </Grid>
+            </Border>
+        </Grid>
+
+    </Grid>
+</Window>
