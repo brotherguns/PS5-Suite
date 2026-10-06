@@ -47,3 +47,6 @@ client-avalonia-android/
 
 # dev scratch: homebrew pkg builds, extracted binaries — not for the repo
 homebrew/
+
+# vendored library source — the client uses the compiled dll (client-avalonia/libs/)
+lib-prospero-pkg/
