@@ -232,6 +232,32 @@ namespace PS5Upload
             else await ShowMessageAsync("No favorite selected");
         }
 
+        // ============================================================
+        // SAVED NAS CONNECTIONS
+        // ============================================================
+        private void LoadNasConnections()
+        {
+            try
+            {
+                if (File.Exists(NasFileName))
+                {
+                    string json = File.ReadAllText(NasFileName);
+                    _nasSaved = System.Text.Json.JsonSerializer.Deserialize<List<NasManager.SavedConnection>>(json) ?? new();
+                }
+            }
+            catch (Exception ex) { Log($"⚠️ Failed to load NAS connections: {ex.Message}"); }
+        }
+
+        private void SaveNasConnections()
+        {
+            try
+            {
+                string json = System.Text.Json.JsonSerializer.Serialize(_nasSaved, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(NasFileName, json);
+            }
+            catch (Exception ex) { Log($"❌ Failed to save NAS connections: {ex.Message}"); }
+        }
+
         private async void FavoritesComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
         {
             if (FavoritesComboBox.SelectedItem is string favoritePath && !string.IsNullOrWhiteSpace(favoritePath))
@@ -489,23 +515,24 @@ namespace PS5Upload
         {
             if (FailedTransfersListBox.SelectedItem is TransferHistoryItem failedItem)
             {
-                if (!File.Exists(failedItem.LocalPath) && !Directory.Exists(failedItem.LocalPath))
+                bool isUnc = LocalIo.IsUnc(failedItem.LocalPath) && NasManager.HasSession(failedItem.LocalPath);
+                bool isFile = isUnc ? NasManager.IsFile(failedItem.LocalPath) : File.Exists(failedItem.LocalPath);
+                bool isDir = !isFile && (isUnc ? NasManager.IsDirectory(failedItem.LocalPath) : Directory.Exists(failedItem.LocalPath));
+                if (!isFile && !isDir)
                 {
-                    await ShowMessageAsync($"File or folder not found: {failedItem.LocalPath}", "Error");
+                    await ShowMessageAsync($"File or folder not found: {failedItem.LocalPath}\n\n(NAS items need an active session — re-add via 🌐 NAS if it was a network path.)", "Error");
                     return;
                 }
                 if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5. Please connect first.", "Error"); return; }
 
                 _failedTransfers.Remove(failedItem);
-                if (File.Exists(failedItem.LocalPath))
+                if (isFile)
                 {
-                    FileInfo info = new(failedItem.LocalPath);
-                    _localFiles.Add(new LocalFileItem { Name = info.Name, FullPath = failedItem.LocalPath, Size = info.Length, IsDirectory = false, Icon = "📄" });
+                    _localFiles.Add(new LocalFileItem { Name = LocalIo.GetName(failedItem.LocalPath), FullPath = failedItem.LocalPath, Size = LocalIo.GetLength(failedItem.LocalPath), IsDirectory = false, Icon = "📄" });
                 }
-                else if (Directory.Exists(failedItem.LocalPath))
+                else
                 {
-                    DirectoryInfo dirInfo = new(failedItem.LocalPath);
-                    _localFiles.Add(new LocalFileItem { Name = dirInfo.Name, FullPath = failedItem.LocalPath, Size = 0, IsDirectory = true, Icon = "📁" });
+                    _localFiles.Add(new LocalFileItem { Name = LocalIo.GetName(failedItem.LocalPath), FullPath = failedItem.LocalPath, Size = 0, IsDirectory = true, Icon = "📁" });
                 }
                 Log($"🔄 Retrying upload: {failedItem.FileName}");
                 await ShowMessageAsync($"Added {failedItem.FileName} back to upload queue. Click 'Upload to PS5' to retry.", "Retry Queued");
@@ -751,6 +778,112 @@ namespace PS5Upload
                 }
             }
             catch (Exception ex) { Log($"❌ Fan error: {ex.Message}"); }
+        }
+
+        // ============================================================
+        // POWER & DEVICES (reboot/shutdown, USB drives, controllers)
+        // ============================================================
+        private async void PowerReboot_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            if (!await ShowConfirmAsync("Reboot the PS5 now?\nThe connection will drop.")) return;
+            try
+            {
+                Log("⚡ Sending reboot...");
+                var (success, message) = await _protocol.PowerActionAsync("reboot");
+                Log(success ? "✅ Reboot command accepted — console is restarting" : $"❌ Reboot failed: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Power error: {ex.Message}"); }
+        }
+
+        private async void PowerShutdown_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            if (!await ShowConfirmAsync("Shut down the PS5 now?\nThe connection will drop.")) return;
+            try
+            {
+                Log("⚡ Sending shutdown...");
+                var (success, message) = await _protocol.PowerActionAsync("shutdown");
+                Log(success ? "✅ Shutdown command accepted — console is powering off" : $"❌ Shutdown failed: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Power error: {ex.Message}"); }
+        }
+
+        private readonly List<PS5UsbDrive> _usbDrives = new();
+
+        private async void RefreshUsbDrives_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                Log("🔌 Scanning USB drives...");
+                var drives = await _protocol.ListUsbDrivesAsync();
+                _usbDrives.Clear();
+                _usbDrives.AddRange(drives);
+                var items = drives.Select(d =>
+                    $"🔌 {d.MountPath}   ({d.FsType}, {d.Device})   {d.FreeGB} free / {d.TotalGB}").ToList();
+                UsbDrivesList.ItemsSource = items.Count > 0 ? items : new List<string> { "No USB drives mounted" };
+                Log(drives.Count > 0 ? $"✅ {drives.Count} USB drive(s)" : "ℹ️ No USB drives mounted");
+            }
+            catch (Exception ex) { Log($"❌ USB error: {ex.Message}"); }
+        }
+
+        private async void BrowseUsbDrive_Click(object? sender, RoutedEventArgs e)
+        {
+            int idx = UsbDrivesList.SelectedIndex;
+            if (idx < 0 || idx >= _usbDrives.Count) { await ShowMessageAsync("Select a USB drive first.", "USB"); return; }
+            string path = _usbDrives[idx].MountPath;
+            Log($"📂 Navigating to {path}");
+            _currentPS5Path = path;
+            NavFiles.IsChecked = true;
+            NavButton_Click(NavFiles, e);
+            await LoadPS5DirectoryAsync(path);
+        }
+
+        private async void RefreshPadInfo_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                Log("🎮 Reading controller info...");
+                string? info = await _protocol.GetPadInfoAsync();
+                if (info == null) { PadInfoText.Text = "—"; Log("❌ Pad info unavailable"); return; }
+
+                var kv = info.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                             .Select(l => l.Split('=', 2))
+                             .Where(p => p.Length == 2)
+                             .ToDictionary(p => p[0], p => p[1]);
+
+                if (kv.TryGetValue("error", out var err))
+                {
+                    PadInfoText.Text = $"⚠️ {err}";
+                    Log($"🎮 Pad: {err}");
+                    return;
+                }
+
+                int handle = int.TryParse(kv.GetValueOrDefault("handle", "-1"), out var h) ? h : -1;
+                if (handle < 0)
+                {
+                    PadInfoText.Text = "No controller connected";
+                    Log($"🎮 No controller connected (handle={handle} init={kv.GetValueOrDefault("init", "?")} user={kv.GetValueOrDefault("user", "?")})");
+                    if (kv.TryGetValue("tries", out var tries))
+                        Log($"🎮 open attempts: {tries}");
+                    return;
+                }
+
+                // The info struct layout varies by SDK rev — show what we know
+                // for sure plus the raw dump so offsets can be mapped.
+                string hex = kv.GetValueOrDefault("infohex", "");
+                string summary = $"Handle: {handle}   User: {kv.GetValueOrDefault("user", "?")}\n";
+                if (hex.Length >= 16)
+                    summary += $"Connected flag: {hex.Substring(12, 2)}   Type: {hex.Substring(10, 2)}\n";
+                summary += $"Info rc: {kv.GetValueOrDefault("info", "?")}   State rc: {kv.GetValueOrDefault("state", "?")}";
+                PadInfoText.Text = summary;
+                Log($"🎮 Pad info: handle={handle} user={kv.GetValueOrDefault("user", "?")}");
+                if (!string.IsNullOrEmpty(hex))
+                    Log($"🎮 infohex: {hex}");
+            }
+            catch (Exception ex) { Log($"❌ Pad error: {ex.Message}"); }
         }
 
         // ============================================================
@@ -1188,6 +1321,26 @@ namespace PS5Upload
             foreach (var f in selected) _localFiles.Remove(f);
         }
 
+        /// Right-click a NAS item → close its SMB session (logoff + disconnect).
+        /// Local paths just get a nudge — nothing to disconnect.
+        private void DisconnectNasMenuItem_Click(object? sender, RoutedEventArgs e)
+        {
+            var selected = LocalFilesListBox.SelectedItems?.Cast<LocalFileItem>().ToList();
+            string? target = selected?.Select(f => f.FullPath).FirstOrDefault(LocalIo.IsUnc)
+                ?? (_localBrowsePath != null && LocalIo.IsUnc(_localBrowsePath) ? _localBrowsePath : null);
+            if (target == null)
+            {
+                Log("ℹ️ No NAS item selected — nothing to disconnect");
+                return;
+            }
+            if (NasManager.Disconnect(target))
+            {
+                Log($"🔌 NAS session closed: {NasManager.ShareRoot(target)}");
+                if (_localBrowsePath != null) ExitLocalBrowse();
+            }
+            else Log("ℹ️ No active SMB session for that share");
+        }
+
         // ============================================================
         // FPKG CONVERSION (LibProsperoPkg)
         // ============================================================
@@ -1365,6 +1518,354 @@ namespace PS5Upload
                 ConvertFpkgButton.IsEnabled = true;
                 FpkgProgressBar.IsVisible = false;
             }
+        }
+
+        // ============================================================
+        // LIGHT BAR / VIBRATION / SCREENSHOT / NOTIFY / LED / BEEPER
+        // ============================================================
+        private async void LightBar_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string rgb = (sender as Control)?.Tag as string ?? "0,0,255";
+            try
+            {
+                var (success, message) = await _protocol.PadActionAsync($"lightbar|{rgb}");
+                Log(success ? $"🎨 Light bar set ({rgb})" : $"❌ Light bar: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Light bar error: {ex.Message}"); }
+        }
+
+        private async void Screenshot_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                Log("📸 Requesting screenshot...");
+                var (success, message) = await _protocol.CaptureScreenshotAsync();
+                Log(success
+                    ? $"✅ Screenshot captured ({message}) — find it under Saves & Media → Screenshots"
+                    : $"❌ Screenshot failed: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Screenshot error: {ex.Message}"); }
+        }
+
+        private async void SendNotify_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string text = NotifyTextBox.Text?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(text)) { await ShowMessageAsync("Type a notification message first.", "Notify"); return; }
+            try
+            {
+                var (success, message) = await _protocol.NotifyAsync(text);
+                Log(success ? $"🔔 Notification sent: \"{text}\"" : $"❌ Notify failed: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Notify error: {ex.Message}"); }
+        }
+
+        private async void LedDim_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string level = (sender as Control)?.Tag as string ?? "0";
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"led|{level}");
+                Log(success ? $"💡 LED brightness set" : $"❌ LED: {message}");
+            }
+            catch (Exception ex) { Log($"❌ LED error: {ex.Message}"); }
+        }
+
+        private async void LedColor_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string bwo = (sender as Control)?.Tag as string ?? "0,255,0";
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"ledcolor|{bwo}");
+                Log(success ? $"💡 LED color set" : $"❌ LED color: {message}");
+            }
+            catch (Exception ex) { Log($"❌ LED color error: {ex.Message}"); }
+        }
+
+        private async void LedEffect_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string label = ((LedEffectCombo.SelectedItem as ComboBoxItem)?.Content as string) ?? "white";
+            // ComboBox display text may carry a description suffix — take the
+            // first token, which is always the preset name.
+            string name = label.Split(' ')[0];
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"ledeffect|{name}");
+                Log(success ? $"✨ LED effect: {name}" : $"❌ LED effect: {message}");
+            }
+            catch (Exception ex) { Log($"❌ LED effect error: {ex.Message}"); }
+        }
+
+        private async void Buzzer_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string type = (sender as Control)?.Tag as string ?? "1";
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"buzzer|{type}");
+                Log(success ? "🔊 Beep!" : $"❌ Beeper: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Beeper error: {ex.Message}"); }
+        }
+
+        private async void BuzzerVol_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string level = (sender as Control)?.Tag as string ?? "0";
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"buzzervol|{level}");
+                Log(success ? "🔊 Beeper volume set" : $"❌ Beeper volume: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Beeper volume error: {ex.Message}"); }
+        }
+
+        private async void BuzzerMute_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string mute = (sender as Control)?.Tag as string ?? "1";
+            try
+            {
+                var (success, message) = await _protocol.IccControlAsync($"buzzermute|{mute}");
+                Log(success ? (mute == "1" ? "🔇 Beeper muted" : "🔊 Beeper unmuted") : $"❌ Beeper mute: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Beeper mute error: {ex.Message}"); }
+        }
+
+        // ============================================================
+        // DISC DUMP
+        // ============================================================
+        private DispatcherTimer? _discDumpTimer;
+
+        private async void DiscDumpStart_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                var (success, message) = await _protocol.DiscDumpAsync("start");
+                if (success)
+                {
+                    Log($"💿 Disc dump started → {message}");
+                    DiscDumpStatusText.Text = $"Dumping to {message}...";
+                    _discDumpTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                    _discDumpTimer.Tick -= DiscDumpTimer_Tick;
+                    _discDumpTimer.Tick += DiscDumpTimer_Tick;
+                    _discDumpTimer.Start();
+                }
+                else
+                {
+                    DiscDumpStatusText.Text = $"❌ {message}";
+                    Log($"❌ Disc dump: {message}");
+                }
+            }
+            catch (Exception ex) { Log($"❌ Disc dump error: {ex.Message}"); }
+        }
+
+        private async void DiscDumpTimer_Tick(object? sender, EventArgs e)
+        {
+            try
+            {
+                var (success, message) = await _protocol.DiscDumpAsync("status");
+                if (!success && string.IsNullOrEmpty(message)) return;
+                var kv = message.Split('|')
+                    .Select(l => l.Split('=', 2))
+                    .Where(p => p.Length == 2)
+                    .ToDictionary(p => p[0], p => p[1]);
+                bool active = kv.GetValueOrDefault("active", "0") == "1";
+                ulong done = ulong.TryParse(kv.GetValueOrDefault("done", "0"), out var d) ? d : 0;
+                ulong total = ulong.TryParse(kv.GetValueOrDefault("total", "0"), out var t) ? t : 0;
+                string file = kv.GetValueOrDefault("file", "");
+                string err = kv.GetValueOrDefault("err", "");
+
+                if (total > 0)
+                {
+                    DiscDumpProgress.Value = Math.Min(100, (double)done * 100.0 / total);
+                    DiscDumpStatusText.Text = $"{done / 1048576:N0} / {total / 1048576:N0} MB — {file}";
+                }
+                else
+                {
+                    DiscDumpStatusText.Text = $"{done / 1048576:N0} MB — {file}";
+                }
+
+                if (!active)
+                {
+                    _discDumpTimer?.Stop();
+                    DiscDumpStatusText.Text = string.IsNullOrEmpty(err)
+                        ? $"✅ Done — {done / 1048576:N0} MB copied to {kv.GetValueOrDefault("dest", "?")}"
+                        : $"⚠️ Stopped: {err}";
+                    Log($"💿 {DiscDumpStatusText.Text}");
+                }
+            }
+            catch { /* transient read errors — keep polling */ }
+        }
+
+        private async void DiscDumpStatus_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                var (success, message) = await _protocol.DiscDumpAsync("status");
+                DiscDumpStatusText.Text = message;
+                Log($"💿 Status: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Disc dump error: {ex.Message}"); }
+        }
+
+        private async void DiscDumpCancel_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            try
+            {
+                var (success, message) = await _protocol.DiscDumpAsync("cancel");
+                Log(success ? "💿 Dump cancelled" : $"❌ Cancel: {message}");
+            }
+            catch (Exception ex) { Log($"❌ Disc dump error: {ex.Message}"); }
+        }
+
+        // ============================================================
+        // HOMEBREW STORE (pkg-zone.com catalog)
+        // ============================================================
+        private sealed class StoreItem : System.ComponentModel.INotifyPropertyChanged
+        {
+            public string Name { get; set; } = "";
+            public string Id { get; set; } = "";
+            public string Version { get; set; } = "";
+            public string Author { get; set; } = "";
+
+            private Bitmap? _cover;
+            public Bitmap? Cover
+            {
+                get => _cover;
+                set { _cover = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Cover))); }
+            }
+
+            public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        }
+
+        private readonly List<StoreItem> _storeItems = new();
+        private static readonly HttpClient _storeHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
+
+        private static string StoreClean(string s)
+            => System.Net.WebUtility.HtmlDecode(s).Trim();
+
+        private async void StoreRefresh_Click(object? sender, RoutedEventArgs e)
+        {
+            try
+            {
+                StoreStatusText.Text = "Fetching pkg-zone.com catalog...";
+                Log("🛒 Fetching homebrew catalog...");
+
+                var items = new List<StoreItem>();
+                var articleRx = new System.Text.RegularExpressions.Regex(
+                    @"<article class=""pkg[\s\S]*?</article>",
+                    System.Text.RegularExpressions.RegexOptions.Compiled);
+                var idRx = new System.Text.RegularExpressions.Regex(
+                    @"/details/([A-Z0-9]+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+                var verRx = new System.Text.RegularExpressions.Regex(
+                    @"<div class=""number text-white text-sm"">\s*([^<]+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+                var titleRx = new System.Text.RegularExpressions.Regex(
+                    @"<div class=""title font-bold"">([^<]+)</div>", System.Text.RegularExpressions.RegexOptions.Compiled);
+                var authorRx = new System.Text.RegularExpressions.Regex(
+                    @"<div class=""dark:text-gray-300"">([^<]*)</div>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+                var seen = new HashSet<string>();
+                for (int page = 1; page <= 15; page++)
+                {
+                    string url = $"https://pkg-zone.com/?console=ps5&page={page}";
+                    string html;
+                    try { html = await _storeHttp.GetStringAsync(url); }
+                    catch (Exception ex)
+                    {
+                        if (page == 1) throw;
+                        Log($"🛒 Page {page} unreachable ({ex.Message}) — stopping");
+                        break;
+                    }
+                    var arts = articleRx.Matches(html);
+                    if (arts.Count == 0) break;
+                    int newOnes = 0;
+                    foreach (System.Text.RegularExpressions.Match m in arts)
+                    {
+                        string block = m.Value;
+                        if (!block.Contains("Supports PS5")) continue;
+                        var idM = idRx.Match(block);
+                        if (!idM.Success || !seen.Add(idM.Groups[1].Value)) continue;
+                        items.Add(new StoreItem
+                        {
+                            Id = idM.Groups[1].Value,
+                            Name = StoreClean(titleRx.Match(block).Groups[1].Value is var tv && tv.Length > 0 ? tv : idM.Groups[1].Value),
+                            Version = StoreClean(verRx.Match(block).Groups[1].Value ?? ""),
+                            Author = StoreClean(authorRx.Match(block).Groups[1].Value ?? ""),
+                        });
+                        newOnes++;
+                    }
+                    if (newOnes == 0) break;
+                    StoreStatusText.Text = $"Fetched {items.Count} packages...";
+                }
+
+                _storeItems.Clear();
+                _storeItems.AddRange(items);
+                ApplyStoreFilter();
+                StoreStatusText.Text = $"{items.Count} PS5 packages";
+                Log($"🛒 Catalog: {items.Count} PS5 packages");
+
+                _ = Task.Run(async () =>
+                {
+                    foreach (var it in _storeItems)
+                    {
+                        try
+                        {
+                            var bytes = await _storeHttp.GetByteArrayAsync($"https://pkg-zone.com/images/{it.Id}/cover.png");
+                            using var ms = new MemoryStream(bytes);
+                            var bmp = new Bitmap(ms);
+                            await Dispatcher.UIThread.InvokeAsync(() => { it.Cover = bmp; });
+                        }
+                        catch { }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                StoreStatusText.Text = "Fetch failed";
+                Log($"❌ Store error: {ex.Message}");
+            }
+        }
+
+        private void ApplyStoreFilter()
+        {
+            string q = StoreSearchBox.Text?.Trim() ?? "";
+            var view = string.IsNullOrEmpty(q)
+                ? _storeItems
+                : _storeItems.Where(i => i.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                      || i.Id.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                      || i.Author.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+            StoreListBox.ItemsSource = view;
+        }
+
+        private void StoreSearch_TextChanged(object? sender, TextChangedEventArgs e) => ApplyStoreFilter();
+
+        private async void StoreInstall_Click(object? sender, RoutedEventArgs e)
+        {
+            if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
+            string? id = (sender as Control)?.Tag as string;
+            if (string.IsNullOrEmpty(id)) return;
+            var item = _storeItems.FirstOrDefault(i => i.Id == id);
+            string name = item?.Name ?? id;
+            if (!await ShowConfirmAsync($"Install \"{name}\" ({id}) on the PS5?")) return;
+            try
+            {
+                string url = $"https://pkg-zone.com/download/ps5/{id}/latest";
+                Log($"📥 Installing {name} from pkg-zone...");
+                var (success, result) = await _protocol.InstallPkgAsync(url);
+                Log(success
+                    ? $"✅ Install accepted: {name} — check the PS5 home screen"
+                    : $"❌ Install failed: {result}");
+            }
+            catch (Exception ex) { Log($"❌ Install error: {ex.Message}"); }
         }
     }
 }

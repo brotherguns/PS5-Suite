@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/reboot.h>
 #include <errno.h>
 #include <stdint.h>
 #include <sys/socket.h>
@@ -25,6 +26,9 @@
 #include <pthread.h>
 #include <time.h>
 #include <ifaddrs.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <net/route.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <setjmp.h>
@@ -73,6 +77,7 @@ extern size_t sceKernelGetDirectMemorySize(void);
 // ============================================================================
 #include <ps5/kernel.h>
 #include <ps5/nid.h>
+#include <ps5/mdbg.h>
 #include <dlfcn.h>
 
 // ============================================================================
@@ -192,6 +197,16 @@ extern int sceSystemServiceLaunchApp(const char *title_id, const char **argv, vo
 // UserService externs (linked)
 extern int sceUserServiceInitialize(void *priority);
 extern int sceUserServiceGetForegroundUser(int *user_id);
+extern int sceUserServiceGetLoginUserIdList(int userIdList[4]);
+// libScePad — linked statically (-lScePad) so the kernel dynlinker loads the
+// module at process start. dlopen'ing it later could hard-freeze the server.
+extern int scePadInit(void);
+extern int scePadOpen(int, int, int, void *);
+extern int scePadGetHandle(int, int, int);
+extern int scePadClose(int);
+extern int scePadReadState(int, void *);
+extern int scePadGetControllerInformation(int, void *);
+extern int scePadSetLightBar(int, const void *);
 
 // KernelSys function pointers
 static int (*g_sceKernelGetHwModelName)(char*) = NULL;
@@ -283,6 +298,25 @@ static void *krpc_resolve_sym(pid_t pid, uint32_t handle, const char *nid) {
     // Modules are < 32 MB; reject anything not inside [base, base+32MB).
     if (p < base || p >= base + 0x2000000) return NULL;
     return (void *)p;
+}
+
+// Same validation for a resolve/dlsym result we already hold: reject the
+// kernel-errno-shaped values (0x8xxxxxxx, ~2GB) that pass naive range checks
+// and SIGSEGV the whole payload when called. Returns the usable pointer or 0.
+static intptr_t krpc_ptr_ok(pid_t pid, uint32_t handle, intptr_t p) {
+    if (p <= 0) return 0;
+    pthread_mutex_lock(&g_krpc_lock);
+    intptr_t base = kernel_dynlib_mapbase_addr(pid, handle);
+    pthread_mutex_unlock(&g_krpc_lock);
+    if (base > 0)
+        return (p >= base && p < base + 0x2000000) ? p : 0;
+    return (p >= 0x100000000 && p <= 0x7FFFFFFFFFFF) ? p : 0;
+}
+
+// dlsym-by-name with the same kernel-errno protection as krpc_resolve_sym.
+static void *krpc_dlsym_checked(pid_t pid, uint32_t handle, const char *sym) {
+    return (void *)(uintptr_t)krpc_ptr_ok(pid, handle,
+        krpc_dynlib_dlsym(pid, handle, sym));
 }
 
 // Find the handle of the kernel module loaded in THIS process.
@@ -396,8 +430,9 @@ static void resolve_extendedinfo_functions(void) {
                 field = (type)(uintptr_t)krpc_resolve_sym(getpid(), hs, nid); \
             if (!field) { \
                 intptr_t p = krpc_dynlib_dlsym(getpid(), h, sym); \
-                if (p <= 0 && have_sys) p = krpc_dynlib_dlsym(getpid(), hs, sym); \
-                if (p > 0x10000 && p < 0x7FFFFFFFFFFF) \
+                uint32_t hh = h; \
+                if (p <= 0 && have_sys) { p = krpc_dynlib_dlsym(getpid(), hs, sym); hh = hs; } \
+                if ((p = krpc_ptr_ok(getpid(), hh, p))) \
                     field = (type)(uintptr_t)p; \
             } \
         } while (0)
@@ -534,9 +569,9 @@ static void resolve_appinstutil(void) {
     
     uint32_t handle = 0;
     if (!krpc_dynlib_handle(-1, "libSceAppInstUtil.sprx", &handle)) {
-        g_sceAppInstUtilAppInstallTitleDir = 
+        g_sceAppInstUtilAppInstallTitleDir =
             (int (*)(const char*, const char*, void*))
-            (uintptr_t)krpc_dynlib_resolve(-1, handle, NID_APPINSTUTIL_INSTALLTITLEDIR);
+            krpc_resolve_sym(-1, handle, NID_APPINSTUTIL_INSTALLTITLEDIR);
     }
     
     g_appinstutil_resolved = 1;
@@ -1971,13 +2006,29 @@ void release_file_mutex(const char *path) {
 // payload loader (elfldr raw-socket protocol — identical to what the PC
 // client does during deploy). The spawned instance sweeps every stale
 // "payload*" process and binds the port — no explicit handoff needed.
-#define SUITE_VERSION      "7.1.5"
+#define SUITE_VERSION      "7.2.3"
 #define SUITE_DIR          "/data/ps5suite"
 #define UPDATE_STAGE_PATH  "/data/ps5suite/update.elf"
 #define UPDATE_MARKER      "/data/ps5suite/update.marker"
 #define UPDATE_LOADER_PORT 9021
-// 0x70-0x75 reserved (experimental pad commands removed — remote pad is not
-// feasible without the Ghostpad ShellCore-patch approach)
+// 0x76-0x7F reserved (was used by removed experimental pad commands)
+
+// App Manager v2 — real per-app info, suspend/resume/kill, coredump
+#define CMD_APP_LIST_V2    0x70  // "pid|appid|title|comm|apptype|cpu_x100|susp\n"
+#define CMD_APP_SUSPEND    0x71  // "appid" → sceLncUtilSuspendApp
+#define CMD_APP_RESUME     0x72  // "appid" → sceLncUtilResumeApp
+#define CMD_APP_KILL       0x73  // "appid" → ForceKillApp, fallback KillApp
+#define CMD_APP_COREDUMP   0x74  // "appid" → KickCoredumpOnlyProcMem
+#define CMD_NET_INFO       0x75  // → key=value lines + if|rx|tx counters
+#define CMD_NET_SPEEDTEST  0x76  // → 16MB stream, client measures link throughput
+#define CMD_POWER_ACTION   0x77  // "reboot"|"shutdown" → reboot() syscall
+#define CMD_USB_LIST       0x78  // → usb mount lines "path|fstype|dev|total|free"
+#define CMD_PAD_INFO       0x79  // → controller info key=value + raw hex dump
+#define CMD_DISC_DUMP      0x7A  // "start"|"status"|"cancel" → disc → HDD copy
+#define CMD_SCREENSHOT     0x7B  // → sceScreenShotCapture (screen grab)
+#define CMD_NOTIFY         0x7C  // "text" → PS5 UI notification
+#define CMD_PAD_ACTION     0x7D  // "lightbar|r,g,b" | "vibrate|l,s"
+#define CMD_ICC_CONTROL    0x7E  // "led|n" "buzzer|n" "buzzervol|n" "buzzermute|n" "ledcolor|b,w,o"
 
 #define CMD_SHUTDOWN 0xFF
 
@@ -2152,9 +2203,8 @@ static void resolve_sce_notif(void) {
     if (krpc_dynlib_handle(getpid(), "libSceNotification.sprx", &mod) == 0 && mod) {
         char nid[12];
         nid_encode("sceNotificationSend", nid);
-        intptr_t p = krpc_dynlib_resolve(getpid(), mod, nid);
-        if (p > 0x10000 && p < 0x7FFFFFFFFFFF)
-            g_sceNotificationSend = (int (*)(int,int,const char*))(uintptr_t)p;
+        void *vp = krpc_resolve_sym(getpid(), mod, nid);
+        if (vp) g_sceNotificationSend = (int (*)(int,int,const char*))vp;
     }
 }
 
@@ -3990,12 +4040,242 @@ void handle_ping(client_session_t *session) {
     send_ok(session->sock, "PONG");
 }
 
+#include <sys/disk.h>
+
 static pthread_mutex_t g_storage_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Read the disk's GPT to enumerate ALL partitions — the system partitions
+// (update, preinst2, eap, vswap, OS images...) are never mounted in our
+// namespace so statfs can't see them, but the GPT always lists them.
+// Returns media size; *non_user_out = total size of all partitions except
+// the largest one (which is /user); *overhang_out = unallocated space.
+static int g_disk_media = 0;  // 0=untried, -1=failed, >0=bytes (cache)
+static uint64_t g_non_user_parts = 0, g_disk_overhang = 0, g_media_bytes = 0;
+
+static char g_disk_dbg[160];   // which devices were tried / what failed
+
+// kern.geom.conftxt dumps the whole GEOM topology (every provider and its
+// mediasize) through sysctl — no raw /dev access needed. Each line is:
+//   <level> <class> <name> <mediasize> <sectorsize> ...
+// Level-0 DISK lines are physical disks; deeper PART lines under them are
+// the partitions (mounted or not). Returns >0 on success.
+static int geom_probe(void) {
+    size_t sz = 0;
+    if (sysctlbyname("kern.geom.conftxt", NULL, &sz, NULL, 0) != 0 ||
+        sz < 64 || sz > (1u << 20))
+        return -1;
+    char *txt = malloc(sz + 1);
+    if (!txt) return -1;
+    if (sysctlbyname("kern.geom.conftxt", txt, &sz, NULL, 0) != 0) {
+        free(txt);
+        return -1;
+    }
+    txt[sz] = 0;
+
+    // Short signature into the debug field so we can see what came back.
+    {
+        char sig[44];
+        int si = 0;
+        for (char *p = txt; *p && si < (int)sizeof(sig) - 1; p++) {
+            if (*p == '\n') sig[si++] = '/';
+            else if (*p >= ' ' && *p < 127) sig[si++] = *p;
+        }
+        sig[si] = 0;
+        snprintf(g_disk_dbg, sizeof(g_disk_dbg), "GEOM:%s", sig);
+    }
+
+    struct { char name[64]; uint64_t media, parts, biggest; int used; } disks[16];
+    memset(disks, 0, sizeof(disks));
+    int cur = -1;
+    for (char *ln = strtok(txt, "\n"); ln; ln = strtok(NULL, "\n")) {
+        int lv; char cls[32], nm[64]; unsigned long long ms;
+        if (sscanf(ln, "%d %31s %63s %llu", &lv, cls, nm, &ms) < 4) continue;
+        if (lv == 0 && !strcmp(cls, "DISK")) {
+            for (cur = 0; cur < 16 && disks[cur].used; cur++);
+            if (cur < 16) {
+                disks[cur].used = 1;
+                disks[cur].media = ms;
+                strncpy(disks[cur].name, nm, sizeof(disks[cur].name) - 1);
+            } else {
+                cur = -1;
+            }
+        } else if (cur >= 0 && lv > 0 && !strcmp(cls, "PART")) {
+            disks[cur].parts += ms;
+            if (ms > disks[cur].biggest) disks[cur].biggest = ms;
+        }
+    }
+    free(txt);
+
+    // Internal disk = the one holding the biggest partition (that's /user).
+    int best = -1;
+    for (int i = 0; i < 16; i++)
+        if (disks[i].used && (best < 0 || disks[i].biggest > disks[best].biggest))
+            best = i;
+    if (best < 0 || !disks[best].parts || !disks[best].biggest) return -1;
+
+    strncat(g_disk_dbg, disks[best].name,
+            sizeof(g_disk_dbg) - strlen(g_disk_dbg) - 1);
+    g_media_bytes    = disks[best].media;
+    g_non_user_parts = disks[best].parts - disks[best].biggest;
+    g_disk_overhang  = (disks[best].media > disks[best].parts)
+                       ? disks[best].media - disks[best].parts : 0;
+    g_disk_media = 1;
+    return 1;
+}
+
+static int disk_gpt_probe(void) {
+    if (g_disk_media != 0) return g_disk_media;
+    g_disk_media = -1;
+    g_disk_dbg[0] = 0;
+
+    // Candidate device names: sysctl kern.disks (real disk list) + guesses
+    char devs[24][32]; int ndev = 0;
+    {
+        char names[256] = {0}; size_t nl = sizeof(names);
+        if (sysctlbyname("kern.disks", names, &nl, NULL, 0) != 0) {
+            snprintf(g_disk_dbg + strlen(g_disk_dbg),
+                     sizeof(g_disk_dbg) - strlen(g_disk_dbg), "K%d", errno);
+        } else {
+            for (char *t = strtok(names, " "); t && ndev < 20; t = strtok(NULL, " ")) {
+                // keep only internal SSD-looking names, skip dm/md/usb-ish
+                if (!strncmp(t, "da", 2) || !strncmp(t, "nv", 2) ||
+                    !strncmp(t, "ad", 2) || !strncmp(t, "nd", 2) ||
+                    !strncmp(t, "mmcsd", 5)) {
+                    snprintf(devs[ndev++], 32, "/dev/%s", t);
+                    strncat(g_disk_dbg, t, 12); strncat(g_disk_dbg, " ", 1);
+                }
+            }
+        }
+    }
+    // Orbis devfs: partitions appear as /dev/ssd0.<name> (ssd0.system,
+    // ssd0.user, ...) and the whole disk as /dev/ssd0. Enumerate /dev — it is
+    // plain devfs, so readdir shows every provider node even when the mounts
+    // only reference a few of them.
+    {
+        DIR *dd = opendir("/dev");
+        if (dd) {
+            struct dirent *de;
+            while ((de = readdir(dd)) && ndev < 24) {
+                if (strncmp(de->d_name, "ssd0", 4)) continue;
+                snprintf(devs[ndev], 32, "/dev/%s", de->d_name);
+                strncat(g_disk_dbg, de->d_name, 12);
+                strncat(g_disk_dbg, ",", 1);
+                ndev++;
+            }
+            closedir(dd);
+        } else {
+            snprintf(g_disk_dbg + strlen(g_disk_dbg),
+                     sizeof(g_disk_dbg) - strlen(g_disk_dbg), "D%d", errno);
+        }
+    }
+    const char *guess[] = { "/dev/ssd0", "/dev/ssd0.user",
+                            "/dev/da0", "/dev/nvd0", "/dev/sflash0", NULL };
+    for (int i = 0; guess[i] && ndev < 24; i++) {
+        int dup = 0;
+        for (int j = 0; j < ndev; j++) if (!strcmp(devs[j], guess[i])) dup = 1;
+        if (!dup) snprintf(devs[ndev++], 32, "%s", guess[i]);
+    }
+
+    uint64_t parts_sum = 0, parts_max = 0, disk_media = 0;
+    for (int i = 0; i < ndev; i++) {
+        int fd = open(devs[i], O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            snprintf(g_disk_dbg + strlen(g_disk_dbg),
+                     sizeof(g_disk_dbg) - strlen(g_disk_dbg), "(%d)", errno);
+            continue;
+        }
+        off_t media = 0;
+        u_int secsize = 512;
+        if (ioctl(fd, DIOCGMEDIASIZE, &media) != 0 || media <= 0) { close(fd); continue; }
+        ioctl(fd, DIOCGSECTORSIZE, &secsize);
+        // Partition node (ssd0.<name>): account its size directly — the GPT
+        // parse below will fail for it, but the sum over all ssd0.* nodes
+        // gives the same partition accounting.
+        if (strstr(devs[i], "ssd0.")) {
+            parts_sum += (uint64_t)media;
+            if ((uint64_t)media > parts_max) parts_max = (uint64_t)media;
+        } else {
+            disk_media = (uint64_t)media;
+        }
+        uint64_t sectors = (uint64_t)media / secsize;
+        // backup GPT header is at the last LBA; entries sit in the 32
+        // sectors right before it
+        size_t tail = 34 * secsize;
+        uint8_t *buf = malloc(tail);
+        if (!buf) { close(fd); continue; }
+        ssize_t got = pread(fd, buf, tail, (off_t)((sectors - 34) * secsize));
+        close(fd);
+        if (got != (ssize_t)tail) { free(buf); continue; }
+        uint8_t *hdr = buf + 32 * secsize;  // backup header at last sector
+        if (memcmp(hdr, "EFI PART", 8) != 0) { free(buf); continue; }
+        uint64_t entries_lba, first_lba;
+        uint32_t nent, entsz;
+        memcpy(&entries_lba, hdr + 72, 8);
+        memcpy(&first_lba,  hdr + 40, 8);
+        memcpy(&nent,  hdr + 80, 4);
+        memcpy(&entsz, hdr + 84, 4);
+        if (nent == 0 || nent > 1024 || entsz < 128) { free(buf); continue; }
+        uint64_t total_part = 0, biggest = 0;
+        uint8_t *ent = buf;  // entries start at sectors-34
+        for (uint32_t e = 0; e < nent && (size_t)(e + 1) * entsz <= 32 * secsize; e++) {
+            uint8_t *en = ent + (size_t)e * entsz;
+            uint64_t type0;
+            memcpy(&type0, en, 8);
+            if (type0 == 0) continue;   // unused entry
+            uint64_t fl, ll;
+            memcpy(&fl, en + 32, 8);
+            memcpy(&ll, en + 40, 8);
+            if (ll < fl) continue;
+            uint64_t sz = (ll - fl + 1) * secsize;
+            total_part += sz;
+            if (sz > biggest) biggest = sz;
+        }
+        free(buf);
+        if (!total_part || !biggest) continue;
+        g_non_user_parts = total_part - biggest;
+        g_disk_overhang  = ((uint64_t)media > total_part) ? (uint64_t)media - total_part : 0;
+        g_disk_media = (int)1;   // success flag (media kept separately below)
+        g_media_bytes = (uint64_t)media;
+        return 1;
+    }
+    // No whole-disk GPT — but ssd0.* partition nodes may still have answered
+    // DIOCGMEDIASIZE. Sum them; biggest partition is /user.
+    if (parts_max) {
+        g_media_bytes    = disk_media ? disk_media : parts_sum;
+        g_non_user_parts = parts_sum - parts_max;
+        g_disk_overhang  = (disk_media > parts_sum) ? disk_media - parts_sum : 0;
+        g_disk_media = 1;
+        return 1;
+    }
+    return -1;
+}
+
+// The GPT probe does raw /dev open+ioctl+pread which may block forever on
+// some device nodes (optical drive, locked disks). Run it on a detached
+// thread exactly once; the storage handler reads only the cached result and
+// never waits on the probe itself.
+static volatile int g_probe_state = 0;  // 0=idle, 1=running, 2=finished
+static void *gpt_probe_worker(void *arg) {
+    (void)arg;
+    if (geom_probe() <= 0)
+        disk_gpt_probe();
+    g_probe_state = 2;
+    return NULL;
+}
+static void gpt_probe_start_async(void) {
+    if (g_probe_state != 0) return;
+    g_probe_state = 1;
+    pthread_t pt;
+    if (pthread_create(&pt, NULL, gpt_probe_worker, NULL) == 0)
+        pthread_detach(pt);
+    else
+        g_probe_state = 0;
+}
 
 void handle_list_storage(client_session_t *session) {
     // Static response buffer: handle_get_system_info() reads it from another
     // thread, so concurrent list-storage calls must not clobber each other.
-    static char g_storage_response_str[512];
+    static char g_storage_response_str[4096];
     pthread_mutex_lock(&g_storage_mutex);
     struct statfs sf;
     
@@ -4020,32 +4300,70 @@ void handle_list_storage(client_session_t *session) {
     uint64_t u_rsvd   = (u_bfree > u_bavail) ? (u_bfree - u_bavail) : 0;
     uint64_t u_displayable = u_total - u_rsvd;
     
-    uint64_t sd_total = 0, sd_bavail = 0;
-    if (statfs("/system_data", &sf) == 0) {
-        uint64_t sd_blksz = sf.f_bsize;
-        sd_total  = (uint64_t)sf.f_blocks * sd_blksz;
-        uint64_t sd_bfree = (uint64_t)sf.f_bfree * sd_blksz;
-        sd_bavail = (sf.f_bavail > 0) ? (uint64_t)sf.f_bavail * sd_blksz : sd_bfree;
-    }
+    uint64_t sd_total = 0;
+    if (statfs("/system_data", &sf) == 0)
+        sd_total = (uint64_t)sf.f_blocks * sf.f_bsize;
     
-    uint64_t sx_total = 0, sx_bavail = 0;
-    if (statfs("/system_ex", &sf) == 0) {
-        uint64_t sx_blksz = sf.f_bsize;
-        sx_total  = (uint64_t)sf.f_blocks * sx_blksz;
-        uint64_t sx_bfree = (uint64_t)sf.f_bfree * sx_blksz;
-        sx_bavail = (sf.f_bavail > 0) ? (uint64_t)sf.f_bavail * sx_blksz : sx_bfree;
+    uint64_t sx_total = 0;
+    if (statfs("/system_ex", &sf) == 0)
+        sx_total = (uint64_t)sf.f_blocks * sf.f_bsize;
+
+    // Other visible system partitions — fallback for the GPT probe
+    uint64_t vis_sys = 0;
+    const char *sys_parts[] = { "/system", "/preinst", "/system_tmp",
+        "/system_data/eap/rodata", "/update", "/preinst2", "/safemode",
+        "/minvsn_update", NULL };
+    for (int i = 0; sys_parts[i]; i++)
+        if (statfs(sys_parts[i], &sf) == 0)
+            vis_sys += (uint64_t)sf.f_blocks * sf.f_bsize;
+
+    // PS5 "Console Storage" convention, verified against Settings > Storage:
+    //   Total = /user(total - minfree) - non-/user partitions
+    //   Free  = /user bavail - minfree - non-/user partitions + unallocated
+    //   Used  = Total - Free
+    // The non-/user partitions (update, preinst2, eap, vswap, OS images)
+    // are read from the disk's GPT; fall back to the visible mounts.
+    uint64_t nonuser = 0, overhang = 0;
+    gpt_probe_start_async();
+    if (g_probe_state == 2 && g_disk_media > 0) {
+        nonuser  = g_non_user_parts;
+        overhang = g_disk_overhang;
+    } else {
+        nonuser = sd_total + sx_total + vis_sys;
     }
-    
-    uint64_t total_bytes = u_displayable + sd_total + sx_total;
-    uint64_t free_bytes  = u_bavail + sd_bavail + sx_bavail;
+
+    uint64_t total_bytes = (u_displayable > nonuser) ? u_displayable - nonuser : u_displayable;
+    uint64_t free_bytes = 0;
+    if (u_bavail > u_rsvd + nonuser - overhang)
+        free_bytes = u_bavail - u_rsvd - nonuser + overhang;
     uint64_t used_bytes  = (total_bytes > free_bytes) ? (total_bytes - free_bytes) : 0;
-    uint64_t reserved_bytes = u_rsvd;
-    
-    uint64_t mounted_games_size = (used_bytes * 95) / 100;
-    uint64_t user_data_size     = used_bytes - mounted_games_size;
-    
+    uint64_t reserved_bytes = u_rsvd + nonuser;
+
+    // Installed games/apps — the REAL figure the PS5 Settings shows comes
+    // from app.db tbl_contentinfo.size (bytes per registered title).
+    uint64_t games_size = 0;
+    {
+        sqlite3 *db = NULL;
+        if (sqlite3_open("/system_data/priv/mms/app.db", &db) == SQLITE_OK) {
+            sqlite3_busy_timeout(db, 2000);
+            sqlite3_stmt *st = NULL;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT COALESCE(SUM(size),0) FROM tbl_contentinfo",
+                    -1, &st, NULL) == SQLITE_OK &&
+                sqlite3_step(st) == SQLITE_ROW)
+                games_size = (uint64_t)sqlite3_column_int64(st, 0);
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+        }
+    }
+
+    // User data = used space not attributed to installed titles (saves,
+    // captures, system blobs) — derived, never fabricated.
+    uint64_t mounted_games_size = games_size;
+    uint64_t user_data_size = (used_bytes > games_size) ? used_bytes - games_size : 0;
+
     snprintf(g_storage_response_str, sizeof(g_storage_response_str),
-             "%llu|%llu|%llu|%llu|%llu|%llu|%llu|%s",
+             "%llu|%llu|%llu|%llu|%llu|%llu|%llu|%s|",
              (unsigned long long)total_bytes,
              (unsigned long long)free_bytes,
              (unsigned long long)free_bytes,
@@ -6154,18 +6472,19 @@ static int resolve_savefs(void) {
         uint32_t mod = 0;
         if (krpc_dynlib_handle(getpid(), "libSceFsInternalForVsh.sprx", &mod) == 0 && mod) {
             char nid[12];
+            void *vp;
             nid_encode("sceFsInitMountSaveDataOpt", nid);
-            intptr_t p = krpc_dynlib_resolve(getpid(), mod, nid);
-            if (p > 0x10000 && p < 0x7FFFFFFFFFFF) g_sceFsInitMountSaveDataOpt = (void*)(uintptr_t)p;
+            vp = krpc_resolve_sym(getpid(), mod, nid);
+            if (vp) g_sceFsInitMountSaveDataOpt = (void*)vp;
             nid_encode("sceFsInitUmountSaveDataOpt", nid);
-            p = krpc_dynlib_resolve(getpid(), mod, nid);
-            if (p > 0x10000 && p < 0x7FFFFFFFFFFF) g_sceFsInitUmountSaveDataOpt = (void*)(uintptr_t)p;
+            vp = krpc_resolve_sym(getpid(), mod, nid);
+            if (vp) g_sceFsInitUmountSaveDataOpt = (void*)vp;
             nid_encode("sceFsMountSaveData", nid);
-            p = krpc_dynlib_resolve(getpid(), mod, nid);
-            if (p > 0x10000 && p < 0x7FFFFFFFFFFF) g_sceFsMountSaveData = (void*)(uintptr_t)p;
+            vp = krpc_resolve_sym(getpid(), mod, nid);
+            if (vp) g_sceFsMountSaveData = (void*)vp;
             nid_encode("sceFsUmountSaveData", nid);
-            p = krpc_dynlib_resolve(getpid(), mod, nid);
-            if (p > 0x10000 && p < 0x7FFFFFFFFFFF) g_sceFsUmountSaveData = (void*)(uintptr_t)p;
+            vp = krpc_resolve_sym(getpid(), mod, nid);
+            if (vp) g_sceFsUmountSaveData = (void*)vp;
         }
     }
 
@@ -7027,6 +7346,481 @@ void handle_mem_search(client_session_t *session, const char *arg) {
 }
 
 // ============================================================================
+// APP MANAGER v2 — real per-app info + suspend/resume/kill/coredump.
+// Sony APIs resolved at RUNTIME by NID on already-loaded modules: a missing
+// export degrades the feature instead of breaking ELF launch. LncUtil calls
+// are daemon IPC → they go through wdg_fn_call (kernel-IPC wedge protection)
+// behind the etahen_present() gate, same as install/launch.
+// ============================================================================
+
+typedef struct {
+    uint32_t app_id;
+    uint64_t unknown1;
+    uint32_t app_type;
+    char     title_id[10];
+    char     unknown2[0x3c];
+} app_info_t;
+
+static int (*g_sceKernelGetAppInfo)(pid_t, app_info_t*) = NULL;
+static int (*g_sceLncUtilSuspendApp)(int, uint32_t, void*) = NULL;
+static int (*g_sceLncUtilResumeApp)(int, uint32_t, void*) = NULL;
+static int (*g_sceLncUtilIsAppSuspended)(int) = NULL;
+static int (*g_sceLncUtilKillApp)(int) = NULL;
+static int (*g_sceLncUtilForceKillApp)(int) = NULL;
+static int (*g_sceLncUtilKickCoredumpOnlyProcMem)(int) = NULL;
+static int g_appmgr_resolved = 0;
+static pthread_mutex_t g_appmgr_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void resolve_appmgr_functions(void) {
+    if (g_appmgr_resolved) return;
+    pthread_mutex_lock(&g_appmgr_lock);
+    if (g_appmgr_resolved) { pthread_mutex_unlock(&g_appmgr_lock); return; }
+
+    char nid[12];
+    // pid → app mapping lives in libkernel_sys (the _web variant stubs it)
+    uint32_t kh = find_kernel_module_handle();
+    {
+        uint32_t hs = 0;
+        if (krpc_dynlib_handle(getpid(), "libkernel_sys.sprx", &hs) == 0 && hs)
+            kh = hs;
+    }
+    if (kh) {
+        nid_encode("sceKernelGetAppInfo", nid);
+        void *p = krpc_resolve_sym(getpid(), kh, nid);
+        if (p) g_sceKernelGetAppInfo = (int (*)(pid_t, app_info_t*))p;
+    }
+
+    // libSceSystemService is already NEEDED by this ELF (LaunchApp import)
+    // → the module is loaded; resolve only, never load.
+    uint32_t sh = 0;
+    static const char *svc_names[] = {
+        "libSceSystemService.sprx", "libSceSystemService",
+        "libSceSystemServiceCore.sprx", NULL
+    };
+    for (int i = 0; svc_names[i] && !sh; i++)
+        if (krpc_dynlib_handle(getpid(), svc_names[i], &sh) != 0) sh = 0;
+    if (sh) {
+#define SVC_RES(field, name, type)                                          \
+        do {                                                                \
+            nid_encode(name, nid);                                          \
+            void *p_ = krpc_resolve_sym(getpid(), sh, nid);                 \
+            if (p_) field = (type)p_;                                       \
+        } while (0)
+        SVC_RES(g_sceLncUtilSuspendApp, "sceLncUtilSuspendApp", int (*)(int, uint32_t, void*));
+        SVC_RES(g_sceLncUtilResumeApp, "sceLncUtilResumeApp", int (*)(int, uint32_t, void*));
+        SVC_RES(g_sceLncUtilIsAppSuspended, "sceLncUtilIsAppSuspended", int (*)(int));
+        SVC_RES(g_sceLncUtilKillApp, "sceLncUtilKillApp", int (*)(int));
+        SVC_RES(g_sceLncUtilForceKillApp, "sceLncUtilForceKillApp", int (*)(int));
+        SVC_RES(g_sceLncUtilKickCoredumpOnlyProcMem, "sceLncUtilKickCoredumpOnlyProcMem", int (*)(int));
+#undef SVC_RES
+    }
+
+    g_appmgr_resolved = 1;
+    pthread_mutex_unlock(&g_appmgr_lock);
+}
+
+// Daemon-IPC call wrapper: 3 args max, watchdog-contained, etaHEN-gated.
+static int lnc_call3(void *fn, int a, uint32_t b, void *c) {
+    if (!fn) return -1000;
+    if (!etahen_present()) return -1001;
+    return wdg_fn_call(fn, (void*)(intptr_t)a, (void*)(uintptr_t)b, c, NULL, 15000);
+}
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Per-process CPU% computed from ki_runtime deltas between list calls —
+// ki_pctcpu is not populated by the Orbis scheduler (always 0), but
+// ki_runtime (µs of CPU consumed, all threads) works: cpu% = Δruntime/Δwall.
+typedef struct { pid_t pid; uint64_t runtime_us; } applist_cpu_t;
+static applist_cpu_t g_applist_cpu[512];
+static int g_applist_cpu_n = 0;
+static uint64_t g_applist_cpu_ms = 0;
+static pthread_mutex_t g_applist_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// GetAppInfo results don't change while a process lives — cache keyed on
+// pid+start-time (guards against pid reuse) so repeat refreshes stay fast.
+typedef struct {
+    pid_t    pid;
+    long     start_sec;
+    app_info_t info;
+} appinfo_cache_t;
+static appinfo_cache_t g_appinfo_cache[512];
+static int g_appinfo_cache_n = 0;
+static int g_appinfo_cache_head = 0;
+
+static int appinfo_lookup(pid_t pid, long start_sec, app_info_t *out) {
+    if (!g_sceKernelGetAppInfo) return -1;
+    for (int i = 0; i < g_appinfo_cache_n; i++) {
+        if (g_appinfo_cache[i].pid == pid &&
+            g_appinfo_cache[i].start_sec == start_sec) {
+            *out = g_appinfo_cache[i].info;
+            return 0;
+        }
+    }
+    app_info_t ai;
+    memset(&ai, 0, sizeof(ai));
+    int ok = (g_sceKernelGetAppInfo(pid, &ai) == 0);
+    if (!ok) ai.app_id = 0xFFFFFFFFu;   // negative-cache marker — still cached
+    int slot = (g_appinfo_cache_n < 512)
+        ? g_appinfo_cache_n++
+        : (g_appinfo_cache_head++ % 512);
+    g_appinfo_cache[slot].pid = pid;
+    g_appinfo_cache[slot].start_sec = start_sec;
+    g_appinfo_cache[slot].info = ai;
+    *out = ai;
+    return ok ? 0 : -1;
+}
+
+void handle_app_list_v2(client_session_t *session) {
+    resolve_appmgr_functions();
+
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0 || size == 0) {
+        send_error(session->sock, "sysctl failed");
+        return;
+    }
+    size += size / 8;
+    char *buf = malloc(size);
+    char *out = malloc(size / 2 + 8192);
+    if (!buf || !out) { free(buf); free(out); send_error(session->sock, "no memory"); return; }
+
+    int off = 0;
+    off += snprintf(out + off, size / 2 + 8192 - off, "appinfo=%s\n",
+        g_sceKernelGetAppInfo ? "ok" : "unavailable");
+    if (sysctl(mib, 4, buf, &size, NULL, 0) == 0) {
+        // snapshot pass 1: current runtime per pid
+        uint64_t now = now_ms();
+        applist_cpu_t *cur = malloc(sizeof(applist_cpu_t) * 512);
+        int cur_n = 0;
+
+        for (char *p = buf; p + sizeof(int) <= buf + size && off < (int)(size / 2 + 8192) - 256; ) {
+            struct kinfo_proc *ki = (struct kinfo_proc *)p;
+            if (ki->ki_structsize <= 0) break;
+            p += ki->ki_structsize;
+
+            app_info_t ai;
+            if (appinfo_lookup(ki->ki_pid, ki->ki_start.tv_sec, &ai) != 0)
+                continue;
+            if (ai.app_id == 0xFFFFFFFFu ||
+                (ai.app_id == 0 && ai.title_id[0] == '\0'))
+                continue;   // kernel/system procs — not apps
+            ai.title_id[9] = '\0';
+
+            if (cur_n < 512) { cur[cur_n].pid = ki->ki_pid; cur[cur_n].runtime_us = ki->ki_runtime; cur_n++; }
+
+            // cpu% = Δruntime / Δwall since previous sample (×100 for 2 decimals)
+            unsigned cpu_x100 = 0;
+            pthread_mutex_lock(&g_applist_lock);
+            uint64_t dt_ms = (now > g_applist_cpu_ms) ? now - g_applist_cpu_ms : 0;
+            if (dt_ms >= 500) {
+                for (int i = 0; i < g_applist_cpu_n; i++) {
+                    if (g_applist_cpu[i].pid == ki->ki_pid) {
+                        uint64_t d_us = (ki->ki_runtime > g_applist_cpu[i].runtime_us)
+                            ? ki->ki_runtime - g_applist_cpu[i].runtime_us : 0;
+                        cpu_x100 = (unsigned)((d_us * 10000ull) / (dt_ms * 1000ull));
+                        break;
+                    }
+                }
+            }
+            pthread_mutex_unlock(&g_applist_lock);
+
+            // SSTOP flag is free (ki_stat); per-app IsAppSuspended daemon
+            // calls were removed — they were the source of multi-second lag.
+            int susp = (ki->ki_stat == 4) ? 1 : 0;
+            off += snprintf(out + off, size / 2 + 8192 - off,
+                "%d|%u|%s|%s|%u|%u|%d\n",
+                ki->ki_pid, ai.app_id, ai.title_id, ki->ki_comm,
+                ai.app_type, cpu_x100, susp);
+        }
+
+        pthread_mutex_lock(&g_applist_lock);
+        memcpy(g_applist_cpu, cur, sizeof(applist_cpu_t) * cur_n);
+        g_applist_cpu_n = cur_n;
+        g_applist_cpu_ms = now;
+        pthread_mutex_unlock(&g_applist_lock);
+        free(cur);
+    }
+    send_response(session->sock, RESP_DATA, out, off);
+    free(out);
+    free(buf);
+}
+
+// "appid|pid" — LncUtil suspend/resume only works for ShellCore-managed app
+// states, so the reliable path is process signals: SIGSTOP freezes every
+// thread of the game (same mechanism the debugger uses), SIGCONT resumes.
+void handle_app_suspend(client_session_t *session, const char *arg) {
+    int appid = (int)strtol(arg ? arg : "", NULL, 0);
+    const char *p2 = arg ? mem_next_field(arg) : NULL;
+    pid_t pid = p2 ? (pid_t)strtol(p2, NULL, 0) : 0;
+    resolve_appmgr_functions();
+    int sig = pid > 0 ? kill(pid, SIGSTOP) : -1;
+    int lnc = appid > 0 ? lnc_call3((void*)g_sceLncUtilSuspendApp, appid, 0, NULL) : -1000;
+    char m[160];
+    snprintf(m, sizeof(m), "suspend: sigstop=%s lnc=%d",
+        sig == 0 ? "ok" : strerror(errno), lnc);
+    if (sig == 0 || lnc == 0) send_response(session->sock, RESP_OK, m, strlen(m));
+    else                      send_error(session->sock, m);
+}
+
+void handle_app_resume(client_session_t *session, const char *arg) {
+    int appid = (int)strtol(arg ? arg : "", NULL, 0);
+    const char *p2 = arg ? mem_next_field(arg) : NULL;
+    pid_t pid = p2 ? (pid_t)strtol(p2, NULL, 0) : 0;
+    resolve_appmgr_functions();
+    int sig = pid > 0 ? kill(pid, SIGCONT) : -1;
+    int lnc = appid > 0 ? lnc_call3((void*)g_sceLncUtilResumeApp, appid, 0, NULL) : -1000;
+    char m[160];
+    snprintf(m, sizeof(m), "resume: sigcont=%s lnc=%d",
+        sig == 0 ? "ok" : strerror(errno), lnc);
+    if (sig == 0 || lnc == 0) send_response(session->sock, RESP_OK, m, strlen(m));
+    else                      send_error(session->sock, m);
+}
+
+void handle_app_coredump(client_session_t *session, const char *arg) {
+    int appid = (int)strtol(arg ? arg : "", NULL, 0);
+    if (appid <= 0) { send_error(session->sock, "Usage: appid|pid"); return; }
+    resolve_appmgr_functions();
+    int rc = lnc_call3((void*)g_sceLncUtilKickCoredumpOnlyProcMem, appid, 0, NULL);
+    char m[192];
+    if (rc == -1000)      snprintf(m, sizeof(m), "coredump unavailable on this module");
+    else if (rc == -1001) snprintf(m, sizeof(m), "coredump needs etaHEN (daemon IPC)");
+    else if (rc == 0)     snprintf(m, sizeof(m), "OK:coredump kicked appid=%d — writes process mem to the system dump dir", appid);
+    else                  snprintf(m, sizeof(m), "coredump appid=%d rc=%d (SCE err)", appid, rc);
+    if (rc == 0) send_response(session->sock, RESP_OK, m, strlen(m));
+    else         send_error(session->sock, m);
+}
+
+void handle_app_kill(client_session_t *session, const char *arg) {
+    int appid = (int)strtol(arg ? arg : "", NULL, 0);
+    const char *p2 = arg ? mem_next_field(arg) : NULL;
+    pid_t pid = p2 ? (pid_t)strtol(p2, NULL, 0) : 0;
+    if (appid <= 0 && pid <= 0) { send_error(session->sock, "Usage: appid|pid"); return; }
+    resolve_appmgr_functions();
+    int rc = appid > 0 ? lnc_call3((void*)g_sceLncUtilForceKillApp, appid, 0, NULL) : -1000;
+    if (rc != 0 && g_sceLncUtilKillApp && appid > 0)
+        rc = lnc_call3((void*)g_sceLncUtilKillApp, appid, 0, NULL);
+    // Ultimate fallback — a signal the process cannot refuse.
+    if (rc != 0 && pid > 0)
+        rc = (kill(pid, SIGKILL) == 0) ? 0 : -errno;
+    char m[160];
+    snprintf(m, sizeof(m), "kill appid=%d pid=%d rc=%d", appid, pid, rc);
+    if (rc == 0) send_response(session->sock, RESP_OK, m, strlen(m));
+    else         send_error(session->sock, m);
+}
+
+// ============================================================================
+// NETWORK INFO — sceNetCtl (linked) for connection state / WiFi / NAT +
+// getifaddrs if_data for per-interface byte counters (live bandwidth).
+// ============================================================================
+extern int sceNetCtlInit(void);
+extern int sceNetCtlGetState(int *state);
+extern int sceNetCtlGetInfo(int code, void *info);
+// NOTE: sceNetCtlGetNatInfo is intentionally unused — it performs a real STUN
+// lookup against Sony servers (unreachable without PSN) and hangs inside the
+// library, blocking/crashing the process even from a detached worker thread.
+
+#define NETCTL_INFO_DEVICE        1
+#define NETCTL_INFO_ETHER_ADDR    2
+#define NETCTL_INFO_MTU           3
+#define NETCTL_INFO_LINK          4
+#define NETCTL_INFO_BSSID         5
+#define NETCTL_INFO_SSID          6
+#define NETCTL_INFO_WIFI_SECURITY 7
+#define NETCTL_INFO_RSSI          8
+#define NETCTL_INFO_IP_CONFIG     9
+#define NETCTL_INFO_IP_ADDRESS    12
+#define NETCTL_INFO_NETMASK       13
+#define NETCTL_INFO_DEFAULT_ROUTE 14
+#define NETCTL_INFO_PRIMARY_DNS   15
+#define NETCTL_INFO_SECONDARY_DNS 16
+
+// Every sceNetCtl call goes through wdg_fn_call: the API talks to the netctl
+// service over IPC and GetNatInfo performs a real STUN lookup — either can
+// block for many seconds or crash. A timed-out function is marked "dead" and
+// skipped instantly on later calls.
+#define NETCTL_CALL_TIMEOUT_MS 3000
+#define NETCTL_CACHE_MS        30000
+
+static int g_netctl_inited = -1;   // -1 unknown, 0 unavailable, 1 ok
+
+// SceNetCtlInfo is a union (~1KB): GetInfo writes the WHOLE union regardless
+// of code, so the buffer must be union-sized or the call smashes the stack.
+#define NETCTL_INFO_BUFSZ 2048
+
+static int netctl_getinfo(int code, void *buf) {
+    return wdg_fn_call((void*)sceNetCtlGetInfo, (void*)(intptr_t)code, buf,
+                       NULL, NULL, NETCTL_CALL_TIMEOUT_MS);
+}
+
+static void netctl_str(char *out, int *off, int cap, int code, const char *key) {
+    static char buf[NETCTL_INFO_BUFSZ];
+    memset(buf, 0, sizeof(buf));
+    if (netctl_getinfo(code, buf) != 0) return;
+    buf[63] = 0;
+    *off += snprintf(out + *off, cap - *off, "%s=%s\n", key, buf);
+}
+static void netctl_int(char *out, int *off, int cap, int code, const char *key) {
+    static char buf[NETCTL_INFO_BUFSZ];
+    memset(buf, 0, sizeof(buf));
+    if (netctl_getinfo(code, buf) != 0) return;
+    int v;
+    memcpy(&v, buf, sizeof(v));
+    *off += snprintf(out + *off, cap - *off, "%s=%d\n", key, v);
+}
+static void netctl_mac(char *out, int *off, int cap, int code, const char *key) {
+    static char buf[NETCTL_INFO_BUFSZ];
+    memset(buf, 0, sizeof(buf));
+    if (netctl_getinfo(code, buf) != 0) return;
+    *off += snprintf(out + *off, cap - *off, "%s=%02x:%02x:%02x:%02x:%02x:%02x\n",
+        key, buf[0]&0xff, buf[1]&0xff, buf[2]&0xff, buf[3]&0xff, buf[4]&0xff, buf[5]&0xff);
+}
+
+// Cached blob of the netctl-derived fields — refreshed at most every 30s so
+// per-tick polls stay cheap (getifaddrs counters are always fresh).
+static char      g_netctl_blob[4096];
+static int       g_netctl_blob_len = 0;
+static long long g_netctl_blob_time = 0;
+
+static void netctl_refresh_blob(void) {
+    int off = 0;
+    g_netctl_blob[0] = 0;
+
+    if (g_netctl_inited < 0)
+        g_netctl_inited =
+            (wdg_fn_call((void*)sceNetCtlInit, NULL, NULL, NULL, NULL,
+                         NETCTL_CALL_TIMEOUT_MS) == 0) ? 1 : 0;
+
+    if (!g_netctl_inited) {
+        off += snprintf(g_netctl_blob + off, sizeof(g_netctl_blob) - off,
+                        "netctl=unavailable\n");
+    } else {
+        char *out = g_netctl_blob;
+        int cap = sizeof(g_netctl_blob);
+        int state = -1;
+        if (wdg_fn_call((void*)sceNetCtlGetState, &state, NULL, NULL, NULL,
+                        NETCTL_CALL_TIMEOUT_MS) == 0)
+            off += snprintf(out + off, cap - off, "state=%d\n", state);  // 0=off,1=connecting,2=online
+        netctl_int(out, &off, cap, NETCTL_INFO_DEVICE,   "device");
+        netctl_mac(out, &off, cap, NETCTL_INFO_ETHER_ADDR, "mac");
+        netctl_int(out, &off, cap, NETCTL_INFO_MTU,      "mtu");
+        netctl_int(out, &off, cap, NETCTL_INFO_LINK,     "link");
+        netctl_str(out, &off, cap, NETCTL_INFO_SSID,     "ssid");
+        netctl_mac(out, &off, cap, NETCTL_INFO_BSSID,    "bssid");
+        netctl_int(out, &off, cap, NETCTL_INFO_WIFI_SECURITY, "wifi_sec");
+        netctl_int(out, &off, cap, NETCTL_INFO_RSSI,     "rssi");
+        netctl_int(out, &off, cap, NETCTL_INFO_IP_CONFIG,"ip_config");
+        // Orbis info-code numbering differs from PS4 docs: emit every IPv4-
+        // shaped field for codes 12..20 (fN=a.b.c.d) and let the client
+        // classify ip/netmask/gateway/dns. ip= stays at code 12.
+        netctl_str(out, &off, cap, NETCTL_INFO_IP_ADDRESS,   "ip");
+        for (int code = 13; code <= 20; code++) {
+            static char buf[NETCTL_INFO_BUFSZ];
+            memset(buf, 0, sizeof(buf));
+            if (netctl_getinfo(code, buf) != 0) continue;
+            buf[63] = 0;
+            // keep only strict a.b.c.d values — skips junk/proxy fields
+            int d1 = 0, d2 = 0, d3 = 0, d4 = 0; char tail = 0;
+            if (sscanf(buf, "%d.%d.%d.%d%c", &d1, &d2, &d3, &d4, &tail) == 4 &&
+                d1 <= 255 && d2 <= 255 && d3 <= 255 && d4 <= 255 &&
+                d1 >= 0 && d2 >= 0 && d3 >= 0 && d4 >= 0)
+                off += snprintf(out + off, cap - off, "f%d=%s\n", code, buf);
+        }
+        // NAT/STUN is not reachable without PSN — reported as unavailable.
+    }
+
+    g_netctl_blob_len = off;
+    g_netctl_blob_time = now_ms();
+}
+
+// Interface byte counters: getifaddrs AF_LINK first (standard BSD), then the
+// routing-socket sysctl NET_RT_IFLIST as a fallback — Orbis getifaddrs may
+// return no AF_LINK entries, but the kernel still answers the sysctl.
+static void net_if_counters(char *out, int *off, int cap) {
+    struct ifaddrs *ifa = NULL;
+    if (getifaddrs(&ifa) == 0) {
+        for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
+            if (!p->ifa_addr || p->ifa_addr->sa_family != AF_LINK || !p->ifa_data)
+                continue;
+            struct if_data *ifd = (struct if_data *)p->ifa_data;
+            if (*off < cap - 80)
+                *off += snprintf(out + *off, cap - *off, "if=%s|rx=%llu|tx=%llu\n",
+                    p->ifa_name,
+                    (unsigned long long)ifd->ifi_ibytes,
+                    (unsigned long long)ifd->ifi_obytes);
+        }
+        freeifaddrs(ifa);
+        if (strstr(out, "if=")) return;
+    }
+
+    int mib[6] = { CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST, 0 };
+    size_t len = 0;
+    if (sysctl(mib, 6, NULL, &len, NULL, 0) != 0 || len == 0 || len > (1 << 20))
+        return;
+    char *buf = malloc(len);
+    if (!buf) return;
+    if (sysctl(mib, 6, buf, &len, NULL, 0) == 0) {
+        for (char *p = buf, *end = buf + len; p < end; ) {
+            struct if_msghdr *ifm = (struct if_msghdr *)p;
+            if (ifm->ifm_msglen == 0) break;
+            if (ifm->ifm_type == RTM_IFINFO) {
+                char name[16] = "?";
+                struct sockaddr_dl *sdl =
+                    (struct sockaddr_dl *)(p + sizeof(struct if_msghdr));
+                if ((char *)sdl < end && sdl->sdl_family == AF_LINK &&
+                    sdl->sdl_nlen < sizeof(name)) {
+                    memcpy(name, sdl->sdl_data, sdl->sdl_nlen);
+                    name[sdl->sdl_nlen] = 0;
+                }
+                if (*off < cap - 80)
+                    *off += snprintf(out + *off, cap - *off,
+                        "if=%s|rx=%llu|tx=%llu\n", name,
+                        (unsigned long long)ifm->ifm_data.ifi_ibytes,
+                        (unsigned long long)ifm->ifm_data.ifi_obytes);
+            }
+            p += ifm->ifm_msglen;
+        }
+    }
+    free(buf);
+}
+
+void handle_net_info(client_session_t *session) {
+    char *out = malloc(4096);
+    if (!out) { send_error(session->sock, "no memory"); return; }
+    int off = 0;
+
+    if (g_netctl_blob_len == 0 || now_ms() - g_netctl_blob_time > NETCTL_CACHE_MS)
+        netctl_refresh_blob();
+    memcpy(out, g_netctl_blob, g_netctl_blob_len);
+    off = g_netctl_blob_len;
+
+    // Interface byte counters (live bandwidth source — client computes rate).
+    // getifaddrs/sysctl can hang on Orbis — run them under the watchdog too.
+    struct { char *out; int *off; int cap; } nc = { out, &off, 4096 };
+    wdg_fn_call((void*)net_if_counters, nc.out, nc.off, (void*)(intptr_t)nc.cap,
+                NULL, 5000);
+
+    send_response(session->sock, RESP_DATA, out, off);
+    free(out);
+}
+
+// ============================================================================
+// LINK SPEED TEST — streams 16MB to the client; client measures receive rate.
+// ============================================================================
+#define SPEEDTEST_BYTES (16u * 1024 * 1024)
+void handle_net_speedtest(client_session_t *session) {
+    uint8_t *buf = malloc(SPEEDTEST_BYTES);
+    if (!buf) { send_error(session->sock, "out of memory"); return; }
+    memset(buf, 0x5A, SPEEDTEST_BYTES);
+    send_response(session->sock, RESP_DATA, buf, SPEEDTEST_BYTES);
+    free(buf);
+}
+
+// ============================================================================
 // KERNEL LOG — read the kernel message buffer (dmesg equivalent) via
 // sysctl kern.msgbuf. Arg = optional tail size in bytes (0 = whole buffer).
 // ============================================================================
@@ -7053,6 +7847,1163 @@ void handle_klog_read(client_session_t *session, const char *arg) {
     free(buf);
 }
 
+
+// ============================================================================
+// POWER ACTION — reboot/shutdown via the reboot() syscall. We run as uid 0
+// after elevation; it is a plain syscall (no daemon IPC) so it works under
+// every loader. The actual reboot runs on a detached thread a few hundred ms
+// later so the RESP_OK reaches the client before the console goes down.
+// ============================================================================
+static void *reboot_thread(void *arg) {
+    int how = (int)(intptr_t)arg;
+    usleep(400 * 1000);
+    sync();
+    reboot(how);
+    return NULL;    // unreachable unless reboot() failed
+}
+
+void handle_power_action(client_session_t *session, const char *arg) {
+    int how;
+    if (arg && !strcmp(arg, "reboot")) {
+        how = RB_AUTOBOOT;
+    } else if (arg && !strcmp(arg, "shutdown")) {
+        how = RB_HALT | RB_POWEROFF;
+    } else {
+        send_error(session->sock, "usage: reboot|shutdown");
+        return;
+    }
+    send_response(session->sock, RESP_OK, arg, strlen(arg));
+    pthread_t t;
+    if (pthread_create(&t, NULL, reboot_thread, (void *)(intptr_t)how) == 0)
+        pthread_detach(t);
+}
+
+// ============================================================================
+// USB LIST — mounted USB drives. Enumerated through getfsstat so it works
+// without any Sony storage daemon IPC: /mnt/usb* paths, /dev/da* nodes, and
+// removable filesystems (exfat/msdosfs) all count.
+// ============================================================================
+void handle_usb_list(client_session_t *session) {
+    char *out = malloc(4096);
+    if (!out) { send_error(session->sock, "Out of memory"); return; }
+    int off = 0;
+    struct statfs *mnt = NULL;
+    int n = getfsstat(NULL, 0, MNT_NOWAIT);
+    if (n > 0) {
+        mnt = malloc((size_t)n * sizeof(*mnt));
+        if (mnt && getfsstat(mnt, (long)(n * sizeof(*mnt)), MNT_NOWAIT) > 0) {
+            for (int i = 0; i < n && off < 3900; i++) {
+                struct statfs *m = &mnt[i];
+                int usb = !strncmp(m->f_mntonname, "/mnt/usb", 8) ||
+                          !strncmp(m->f_mntfromname, "/dev/da", 7) ||
+                          !strncmp(m->f_mntfromname, "/dev/nvd", 8) ||
+                          strstr(m->f_mntfromname, "usb") != NULL ||
+                          !strcmp(m->f_fstypename, "msdosfs") ||
+                          !strcmp(m->f_fstypename, "exfat");
+                if (!usb) continue;
+                off += snprintf(out + off, 4096 - off, "%s|%s|%s|%llu|%llu\n",
+                    m->f_mntonname, m->f_fstypename, m->f_mntfromname,
+                    (unsigned long long)m->f_blocks * m->f_bsize,
+                    (unsigned long long)m->f_bavail * m->f_bsize);
+            }
+        }
+        free(mnt);
+    }
+    if (off == 0) off = snprintf(out, 4096, "NONE\n");
+    send_response(session->sock, RESP_DATA, out, off);
+    free(out);
+}
+
+// ============================================================================
+// PAD INFO — DualSense status through libScePad. Resolved at runtime like the
+// save-fs functions (the lib may not be mapped in a bare payload); the whole
+// call sequence runs inside one watchdog worker because scePad* does daemon
+// IPC that wedges under kstuff-light. The controller-information struct
+// differs between SDK revisions, so we also return a raw hex dump for offset
+// mapping (battery level/charge live somewhere in there).
+// ============================================================================
+static int (*g_scePadInit)(void) = NULL;
+static int (*g_scePadOpen)(int, int, int, void *) = NULL;
+static int (*g_scePadGetHandle)(int, int, int) = NULL;
+static int (*g_scePadReadState)(int, void *) = NULL;
+static int (*g_scePadGetControllerInformation)(int, void *) = NULL;
+static int (*g_scePadClose)(int) = NULL;
+static int g_pad_resolved = 0;
+
+static int resolve_pad(void) {
+    if (!g_pad_resolved) {
+        // Statically linked — symbols always exist, zero runtime resolution.
+        g_scePadInit                     = scePadInit;
+        g_scePadOpen                     = scePadOpen;
+        g_scePadGetHandle                = scePadGetHandle;
+        g_scePadReadState                = scePadReadState;
+        g_scePadGetControllerInformation = scePadGetControllerInformation;
+        g_scePadClose                    = scePadClose;
+        g_pad_resolved = 1;
+    }
+    return 1;
+}
+
+// ============================================================================
+// SHELLCORE REMOTE PAD BRIDGE — libScePad refuses payload processes (no UI
+// session: every scePadOpen returns 0x809B0081). SceShellCore owns the pad
+// session, so we borrow its address space: PT_ATTACH, resolve libScePad inside
+// the remote process through kernel RPC, hijack the stopped thread for a
+// bounded remote call (pushed fake return address -> int3 gadget -> SIGTRAP),
+// then restore its registers and copy results back with PT_IO. Same technique
+// as the HID-Dumper payload. The pad handle lives inside ShellCore — it is
+// acquired once, cached, never closed.
+// ============================================================================
+// Remote memory goes through the kernel RPC copy primitives — PT_IO and
+// mdbg writes are both denied against system processes, but the kernel's
+// own proc_copyin/copyout work under the debugger authid.
+static int rpc_read(pid_t pid, intptr_t addr, void *buf, size_t len) {
+    pthread_mutex_lock(&g_krpc_lock);
+    int r = kernel_proc_copyout(pid, addr, buf, len);
+    pthread_mutex_unlock(&g_krpc_lock);
+    return r;
+}
+static int rpc_write(pid_t pid, intptr_t addr, const void *buf, size_t len) {
+    pthread_mutex_lock(&g_krpc_lock);
+    int r = kernel_proc_copyin(pid, buf, addr, len);
+    pthread_mutex_unlock(&g_krpc_lock);
+    return r;
+}
+
+static pid_t proc_find_name(const char *comm) {
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0 };
+    size_t len = 0;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0 || !len) return -1;
+    uint8_t *buf = malloc(len);
+    pid_t found = -1;
+    if (buf && sysctl(mib, 4, buf, &len, NULL, 0) == 0) {
+        size_t sz = ((struct kinfo_proc *)buf)->ki_structsize;
+        for (uint8_t *p = buf; p < buf + len && sz; p += sz) {
+            struct kinfo_proc *ki = (struct kinfo_proc *)p;
+            if (!strcmp(ki->ki_comm, comm)) { found = ki->ki_pid; break; }
+        }
+    }
+    free(buf);
+    return found;
+}
+
+typedef struct {
+    volatile int dead;  // a call timed out — stop issuing remote calls
+    pid_t pid;
+    struct reg bak;
+    uint8_t bak_guard[512];  // kernel reg dump may exceed our struct reg
+    intptr_t int3;      // remote int3 gadget address
+    intptr_t scratch;   // remote scratch buffer (deep below the stopped frame)
+} rpc_sess_t;
+
+static char g_scp_dbg[200];
+
+// Any 0xcc byte inside executable text works as an int3 gadget — compilers pad
+// between functions with int3, so the first hit is usually a few hundred
+// bytes past the seed.
+static intptr_t rpc_find_int3(pid_t pid, intptr_t seed) {
+    uint8_t buf[4096];
+    for (intptr_t a = seed; a < seed + 0x40000; a += (intptr_t)sizeof(buf)) {
+        if (rpc_read(pid, a, buf, sizeof(buf)) != 0) break;
+        uint8_t *p = memchr(buf, 0xcc, sizeof(buf));
+        if (p) return a + (p - buf);
+    }
+    return 0;
+}
+
+static int rpc_attach(rpc_sess_t *s, pid_t pid, intptr_t int3_seed) {
+    memset(s, 0, sizeof(*s));
+    s->pid = pid;
+    if (ptrace(PT_ATTACH, pid, 0, 0) != 0) return -(0x100 + errno);
+    if (waitpid(pid, NULL, 0) < 0) { mem_detach(pid); return -(0x200 + errno); }
+    if (ptrace(PT_GETREGS, pid, (caddr_t)&s->bak, 0) != 0) {
+        mem_detach(pid);
+        return -(0x300 + errno);
+    }
+    s->scratch = s->bak.r_rsp - 0x8000;  // remote stack, below any live frame
+    s->int3 = rpc_find_int3(pid, int3_seed);
+    if (!s->int3) {
+        uint8_t tbuf[64];
+        int got = rpc_read(pid, int3_seed, tbuf, sizeof(tbuf));
+        snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                 sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                 " rsp=%lx io=%d", (long)s->bak.r_rsp, got);
+        mem_detach(pid);
+        return -3;
+    }
+    return 0;
+}
+
+// Bounded remote call: write an int3 return address under the stopped thread's
+// stack pointer, run the function, wait for the trap (<=3s), restore the
+// thread exactly as we found it. Between calls the process stays attached and
+// stopped, so rpc_call is cheap to repeat.
+__attribute__((noinline))
+static long rpc_call(rpc_sess_t *s, intptr_t fn,
+                     long a1, long a2, long a3, long a4, long a5, long a6) {
+    if (s->dead) {
+        snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                 sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                 " PREDEAD fn=%lx d=%d", (long)fn, s->dead);
+        return -0x7777;
+    }
+    s->dead = 1;  // re-purposed as stage marker until the call completes
+    uint64_t retaddr = (uint64_t)s->int3;
+    int wrc = rpc_write(s->pid, s->bak.r_rsp - 8, &retaddr, 8);
+    if (wrc != 0) {
+        snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                 sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                 " wrc=%d@%lx", wrc, (long)(s->bak.r_rsp - 8));
+        return -0x1001;
+    }
+    struct reg j = s->bak;
+    j.r_rip = fn;
+    j.r_rsp = s->bak.r_rsp - 8;
+    j.r_rdi = a1; j.r_rsi = a2; j.r_rdx = a3;
+    j.r_rcx = a4; j.r_r8 = a5; j.r_r9 = a6;
+    if (ptrace(PT_SETREGS, s->pid, (caddr_t)&j, 0) != 0) { s->dead = 2; return -0x1002; }
+    if (ptrace(PT_CONTINUE, s->pid, (caddr_t)1, 0) != 0) { s->dead = 3; return -0x1003; }
+    s->dead = 4;  // continued — waiting for the trap now
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        int st = 0;
+        if (waitpid(s->pid, &st, WNOHANG) == s->pid && WIFSTOPPED(st)) {
+            struct reg cur;
+            memset(&cur, 0, sizeof(cur));
+            ptrace(PT_GETREGS, s->pid, (caddr_t)&cur, 0);
+            snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                     sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                     " ev=%d@%lx rax=%lx", WSTOPSIG(st), (long)cur.r_rip,
+                     (long)cur.r_rax);
+            if (WSTOPSIG(st) == SIGTRAP && cur.r_rip == s->int3 + 1) {
+                long rax = (long)cur.r_rax;
+                ptrace(PT_SETREGS, s->pid, (caddr_t)&s->bak, 0);
+                s->dead = 0;
+                return rax;
+            }
+            // Some other thread event — swallow it and keep waiting.
+            ptrace(PT_CONTINUE, s->pid, (caddr_t)1, 0);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        if ((t1.tv_sec - t0.tv_sec) * 1000 +
+            (t1.tv_nsec - t0.tv_nsec) / 1000000 > 3000) {
+            // The remote call blocked (lock contention inside ShellCore).
+            // Force-stop, restore the hijacked thread, mark session dead.
+            kill(s->pid, SIGSTOP);
+            int st2 = 0;
+            waitpid(s->pid, &st2, 0);
+            ptrace(PT_SETREGS, s->pid, (caddr_t)&s->bak, 0);
+            return -0x1004;
+        }
+        usleep(1000);
+    }
+}
+
+static void rpc_detach(rpc_sess_t *s) {
+    ptrace(PT_SETREGS, s->pid, (caddr_t)&s->bak, 0);
+    mem_detach(s->pid);
+}
+
+static intptr_t scp_sym(pid_t pid, const char *name) {
+    uint32_t h = 0;
+    if (krpc_dynlib_handle(pid, "libScePad.sprx", &h) != 0 || !h) return 0;
+    return (intptr_t)krpc_dlsym_checked(pid, h, name);
+}
+
+static intptr_t scp_sym_mod(pid_t pid, const char *mod, const char *name) {
+    uint32_t h = 0;
+    if (krpc_dynlib_handle(pid, mod, &h) != 0 || !h) return 0;
+    return (intptr_t)krpc_dlsym_checked(pid, h, name);
+}
+
+static pid_t g_scp_pid = -1;
+static int   g_scp_handle = -1;
+static rpc_sess_t g_scp_sess;              // static: survives stack corruption
+static pthread_mutex_t g_scp_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+// One attach session against SceShellCore. op: 0 = read state+info,
+// 1 = set lightbar (params = 4B rgba). Returns the remote call rc (or a negative bridge error).
+static long scp_session(int op, const uint8_t *params, size_t plen,
+                        uint8_t *state_out, uint8_t *info_out) {
+    // SceShellCore for state; SceShellUI for lightbar (foreground ownership).
+    pid_t pid = proc_find_name(op ? "SceShellUI" : "SceShellCore");
+    if (pid < 0 && op) pid = proc_find_name("SceShellCore");
+    if (pid < 0) return -10;
+    intptr_t fn_open  = scp_sym(pid, "scePadOpen");
+    intptr_t fn_geth  = scp_sym(pid, "scePadGetHandle");
+    intptr_t fn_read  = scp_sym(pid, "scePadReadState");
+    intptr_t fn_info  = scp_sym(pid, "scePadGetControllerInformation");
+    intptr_t fn_light = scp_sym(pid, "scePadSetLightBar");
+    intptr_t seed = fn_read ? fn_read : (fn_open ? fn_open : 0);
+    snprintf(g_scp_dbg, sizeof(g_scp_dbg),
+             "pid=%d open=%lx geth=%lx read=%lx info=%lx lb=%lx",
+             (int)pid, (long)fn_open, (long)fn_geth, (long)fn_read,
+             (long)fn_info, (long)fn_light);
+    if (!seed) return -11;
+
+    // PT_ATTACH on a system process needs the debugger authid in our ucred —
+    // swap it in for the duration of the session, then restore.
+    pid_t me = getpid();
+    uint64_t old_authid = kernel_get_ucred_authid(me);
+    kernel_set_ucred_authid(me, 0x4800000000010003ULL);
+
+    pthread_mutex_lock(&g_scp_mtx);
+    rpc_sess_t *sp = &g_scp_sess;
+    int arc = rpc_attach(sp, pid, seed);
+    snprintf(g_scp_dbg + strlen(g_scp_dbg),
+             sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+             " arc=%d dead0=%d int3=%lx scr=%lx",
+             arc, sp->dead, (long)sp->int3, (long)sp->scratch);
+    if (arc != 0) {
+        pthread_mutex_unlock(&g_scp_mtx);
+        kernel_set_ucred_authid(me, old_authid);
+        return arc;
+    }
+
+    // Acquire the pad handle inside ShellCore once. Single open only — a
+    // multi-open sweep is what historically crashed ShellCore in hidDumper.
+    if (g_scp_pid != pid || g_scp_handle < 0) {
+        g_scp_pid = pid;
+        g_scp_handle = -1;
+    }
+    if (g_scp_handle < 0) {
+        // Ask ShellCore's own UserService who is logged in — its session is
+        // the real one (our process gets an empty list).
+        int uids[8] = {0};
+        intptr_t fn_login = scp_sym_mod(pid, "libSceUserService.sprx",
+                                        "sceUserServiceGetLoginUserIdList");
+        intptr_t fn_fg = scp_sym_mod(pid, "libSceUserService.sprx",
+                                     "sceUserServiceGetForegroundUser");
+        if (fn_login && !sp->dead) {
+            rpc_call(sp, fn_login, sp->scratch, 0, 0, 0, 0, 0);
+            rpc_read(pid, sp->scratch, uids, sizeof(uids));
+        }
+        if (fn_fg && !sp->dead) {
+            rpc_call(sp, fn_fg, sp->scratch + 0x40, 0, 0, 0, 0, 0);
+            rpc_read(pid, sp->scratch + 0x40, &uids[4], 4);
+        }
+        uids[5] = 0x10000000;
+        snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                 sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                 " uids=%08x %08x %08x %08x %08x",
+                 uids[0], uids[1], uids[2], uids[3], uids[4]);
+
+        long h = -1, h2 = -100;
+        for (int i = 0; i <= 5 && h <= 0 && !sp->dead; i++) {
+            int u = uids[i];
+            if (!u) continue;
+            long g = fn_geth ? rpc_call(sp, fn_geth, u, 0, 0, 0, 0, 0) : -1;
+            snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                     sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                     " g%x=%lx", u, g);
+            if (g > 0 && g < 0x80000000) { h = g; break; }
+            if (fn_open) {
+                g = rpc_call(sp, fn_open, u, 0, 0, 0, 0, 0);
+                snprintf(g_scp_dbg + strlen(g_scp_dbg),
+                         sizeof(g_scp_dbg) - strlen(g_scp_dbg),
+                         " o%x=%lx", u, g);
+                if (g > 0 && g < 0x80000000) h = g;
+            }
+        }
+        if (h > 0) { g_scp_handle = (int)h; g_scp_pid = pid; }
+        (void)h2;
+    }
+
+    long rc = g_scp_handle;
+    if (g_scp_handle >= 0 && !sp->dead) {
+        if (op != 0 && params && plen) {
+            if (rpc_write(pid, sp->scratch, params, plen) == 0) {
+                if (fn_light) rc = rpc_call(sp, fn_light, g_scp_handle, sp->scratch, 0, 0, 0, 0);
+            } else rc = -0x1005;
+        }
+        if (state_out && !sp->dead) {
+            rc = rpc_call(sp, fn_read, g_scp_handle, sp->scratch, 0, 0, 0, 0);
+            rpc_read(pid, sp->scratch, state_out, 256);
+        }
+        if (info_out && fn_info && !sp->dead) {
+            rpc_call(sp, fn_info, g_scp_handle, sp->scratch, 0, 0, 0, 0);
+            rpc_read(pid, sp->scratch, info_out, 256);
+        }
+        if (rc < 0 && (rc & 0xffff0000) == 0x80920000)
+            g_scp_handle = -1;  // handle died — re-acquire next session
+    }
+    rpc_detach(sp);
+    pthread_mutex_unlock(&g_scp_mtx);
+    kernel_set_ucred_authid(me, old_authid);
+    return rc;
+}
+
+typedef struct {
+    int rc_init, rc_open, user, handle, rc_info, rc_state, borrowed;
+    int remote;   // 1 when the handle lives inside SceShellCore
+    int tries[24]; // per-attempt rc for each (uid,type) attempt
+    uint8_t info[256];
+    uint8_t state[256];
+    int login_uids[4];
+    int login_n;
+    int ctrlp;
+} pad_work_t;
+
+// Tries scePadOpen across a (user, portType) matrix and records every
+// attempt's rc so the log shows WHY open fails (bad uid vs bad type vs none).
+// Candidates: the real logged-in user ids first, then the known fallbacks.
+// Falls back to scePadGetHandle — a pad already opened by another process
+// (ShellUI) can't be re-opened, but its handle is still usable. Borrowed
+// handles must NOT be closed.
+static int pad_open_any(int fg_user, const int *logins, int login_n,
+                        int *handle, int tries[24], int *borrowed) {
+    // PS5 user ids are 0x10000000-style handles, not small integers.
+    int uids[16];
+    int un = 0;
+    for (int i = 0; i < login_n && un < 16; i++) uids[un++] = logins[i];
+    int fallbacks[] = { fg_user, 0x10000000, 0x10000001, 0x10000002,
+                        -1, 1, 2, 0 };
+    for (unsigned i = 0; i < sizeof(fallbacks)/sizeof(fallbacks[0]) && un < 16; i++)
+        uids[un++] = fallbacks[i];
+    int n = 0;
+    *handle = -1; *borrowed = 0;
+    for (int t = 0; t < 2 && *handle < 0; t++)
+        for (int i = 0; i < un && *handle < 0; i++) {
+            int rc = g_scePadOpen(uids[i], t, 0, NULL);
+            if (n < 24) tries[n++] = rc;
+            if (rc >= 0) *handle = rc;
+        }
+    if (*handle < 0 && g_scePadGetHandle) {
+        for (int t = 0; t < 2 && *handle < 0; t++)
+            for (int i = 0; i < un && *handle < 0; i++) {
+                int rc = g_scePadGetHandle(uids[i], t, 0);
+                if (n < 24) tries[n++] = rc;
+                if (rc >= 0) { *handle = rc; *borrowed = 1; }
+            }
+    }
+    return *handle;
+}
+
+static int pad_work(pad_work_t *w) {
+    // scePadInit is owned by ShellCore and fails in payloads — harmless, but
+    // keep the rc so the log shows it.
+    w->rc_init = g_scePadInit ? g_scePadInit() : 0;
+    w->user = 0;
+    sceUserServiceGetForegroundUser(&w->user);
+    memset(w->login_uids, 0, sizeof(w->login_uids));
+    w->login_n = sceUserServiceGetLoginUserIdList(w->login_uids);
+    if (w->login_n < 0) w->login_n = 0;
+    if (w->login_n > 4) w->login_n = 4;
+    w->ctrlp = access("/dev/ctrlp", F_OK) == 0;
+    pad_open_any(w->user, w->login_uids, w->login_n,
+                 &w->handle, w->tries, &w->borrowed);
+    w->rc_open = w->handle;
+    if (w->handle < 0) {
+        // The pad service won't hand a payload a handle — borrow SceShellCore's
+        // pad session over ptrace instead (HID-Dumper technique).
+        memset(w->info, 0, sizeof(w->info));
+        memset(w->state, 0, sizeof(w->state));
+        long rrc = scp_session(0, NULL, 0, w->state, w->info);
+        if (g_scp_handle >= 0) {
+            w->handle = g_scp_handle;
+            w->borrowed = 1;
+            w->remote = 1;
+            w->rc_info = 0;
+            w->rc_state = (int)rrc;
+            w->rc_open = w->handle;
+            return 0;
+        }
+        w->rc_open = (int)rrc;
+        return 0;
+    }
+    memset(w->info, 0, sizeof(w->info));
+    if (g_scePadGetControllerInformation)
+        w->rc_info = g_scePadGetControllerInformation(w->handle, w->info);
+    memset(w->state, 0, sizeof(w->state));
+    if (g_scePadReadState)
+        w->rc_state = g_scePadReadState(w->handle, w->state);
+    if (!w->borrowed && g_scePadClose) g_scePadClose(w->handle);
+    return 0;
+}
+
+// resolve_pad() does dlopen + kernel RPCs — both can park. It must NEVER run
+// on the command thread: one hang there freezes every later command. Run the
+// resolve inside the watchdog worker instead so a park only costs 8s.
+static int pad_full_work(pad_work_t *w) {
+    if (!resolve_pad()) { w->rc_open = -99; return 0; }
+    return pad_work(w);
+}
+
+void handle_pad_info(client_session_t *session) {
+    char *out = malloc(2048);
+    if (!out) { send_error(session->sock, "Out of memory"); return; }
+    int off = 0;
+    if (!etahen_present()) {
+        off = snprintf(out, 2048, "error=pad service needs etaHEN\n");
+    } else {
+        pad_work_t w;
+        memset(&w, 0, sizeof(w));
+        int wrc = wdg_fn_call((void *)pad_full_work, &w, NULL, NULL, NULL, 8000);
+        if (w.rc_open == -99) {
+            off = snprintf(out, 2048, "error=libScePad unavailable\n");
+        } else
+        if (wrc != 0) {
+            off = snprintf(out, 2048, "error=pad ipc timeout\n");
+        } else {
+            off += snprintf(out + off, 2048 - off,
+                "user=%d\nhandle=%d\ninit=%d\ninfo=%d\nstate=%d\nopen=%d\nremote=%d\nctrlp=%d\nlogins=",
+                w.user, w.handle, w.rc_init, w.rc_info, w.rc_state,
+                w.rc_open, w.remote, w.ctrlp);
+            for (int i = 0; i < w.login_n; i++)
+                off += snprintf(out + off, 2048 - off, "%08x ", (unsigned)w.login_uids[i]);
+            off += snprintf(out + off, 2048 - off, "\ndbg=%s\ntries=", g_scp_dbg);
+            for (int i = 0; i < 24 && off < 1700; i++)
+                off += snprintf(out + off, 2048 - off, "%08x ", (unsigned)w.tries[i]);
+            off += snprintf(out + off, 2048 - off, "\n");
+            if (w.handle >= 0) {
+                off += snprintf(out + off, 2048 - off, "infohex=");
+                for (int i = 0; i < 128 && off < 1700; i++)
+                    off += snprintf(out + off, 2048 - off, "%02x", w.info[i]);
+                off += snprintf(out + off, 2048 - off, "\nstatehex=");
+                for (int i = 0; i < 64 && off < 1950; i++)
+                    off += snprintf(out + off, 2048 - off, "%02x", w.state[i]);
+                off += snprintf(out + off, 2048 - off, "\n");
+            }
+        }
+    }
+    send_response(session->sock, RESP_DATA, out, off);
+    free(out);
+}
+
+// ============================================================================
+// DISC DUMP — copy an inserted disc (/mnt/disc*) to /user/data/disc_dumps on
+// a background thread. Pure filesystem work — no daemon IPC — so it is safe
+// under every loader. Progress is polled through "status"; "cancel" stops it.
+// ============================================================================
+static volatile int g_dump_active = 0, g_dump_cancel = 0;
+static uint64_t g_dump_done = 0, g_dump_total = 0;
+static int g_dump_files = 0;
+static char g_dump_file[1024] = {0};
+static char g_dump_err[256] = {0};
+static char g_dump_dest[1024] = {0};
+
+static int find_disc_mount(char *out, size_t n) {
+    static const char *cand[] = {
+        "/mnt/disc", "/mnt/disc0", "/mnt/disc1", "/disc", "/mnt/cdrom", NULL
+    };
+    for (int i = 0; cand[i]; i++) {
+        DIR *d = opendir(cand[i]);
+        if (d) { closedir(d); snprintf(out, n, "%s", cand[i]); return 0; }
+    }
+    return -1;
+}
+
+static int mkdir_p(const char *path) {
+    char tmp[2048];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
+    }
+    return mkdir(tmp, 0755);
+}
+
+static void count_tree(const char *src, uint64_t *bytes) {
+    DIR *d = opendir(src);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && !g_dump_cancel) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[2048];
+        snprintf(p, sizeof(p), "%s/%s", src, e->d_name);
+        struct stat st;
+        if (stat(p, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) count_tree(p, bytes);
+        else *bytes += (uint64_t)st.st_size;
+    }
+    closedir(d);
+}
+
+static void dump_tree(const char *src, const char *dst) {
+    if (g_dump_cancel) return;
+    DIR *d = opendir(src);
+    if (!d) return;
+    mkdir_p(dst);
+    struct dirent *e;
+    uint8_t *buf = malloc(256 * 1024);
+    while ((e = readdir(d)) && !g_dump_cancel) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char sp[2048], dp[2048];
+        snprintf(sp, sizeof(sp), "%s/%s", src, e->d_name);
+        snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name);
+        struct stat st;
+        if (stat(sp, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) { dump_tree(sp, dp); continue; }
+        int in = open(sp, O_RDONLY);
+        if (in < 0) continue;
+        int out = open(dp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (out < 0) { close(in); continue; }
+        snprintf(g_dump_file, sizeof(g_dump_file), "%s", e->d_name);
+        g_dump_files++;
+        ssize_t r;
+        while ((r = read(in, buf, 256 * 1024)) > 0) {
+            if (g_dump_cancel) break;
+            ssize_t w = 0;
+            while (w < r) {
+                ssize_t x = write(out, buf + w, r - w);
+                if (x <= 0) break;
+                w += x;
+            }
+            g_dump_done += (uint64_t)r;
+        }
+        close(in);
+        close(out);
+    }
+    free(buf);
+    closedir(d);
+}
+
+static void *disc_dump_worker(void *arg) {
+    char *src = (char *)arg;
+    count_tree(src, &g_dump_total);
+    dump_tree(src, g_dump_dest);
+    g_dump_active = 0;
+    free(src);
+    return NULL;
+}
+
+void handle_disc_dump(client_session_t *session, const char *arg) {
+    if (!arg || !*arg) { send_error(session->sock, "usage: start|status|cancel"); return; }
+    if (!strcmp(arg, "status")) {
+        char st[1600];
+        int n = snprintf(st, sizeof(st), "active=%d|done=%llu|total=%llu|files=%d|file=%s|err=%s|dest=%s",
+            g_dump_active, (unsigned long long)g_dump_done,
+            (unsigned long long)g_dump_total, g_dump_files, g_dump_file,
+            g_dump_err, g_dump_dest);
+        send_response(session->sock, RESP_DATA, st, n);
+        return;
+    }
+    if (!strcmp(arg, "cancel")) {
+        g_dump_cancel = 1;
+        send_response(session->sock, RESP_OK, "cancelled", 9);
+        return;
+    }
+    if (!strcmp(arg, "start")) {
+        if (g_dump_active) { send_error(session->sock, "dump already running"); return; }
+        char src[64];
+        if (find_disc_mount(src, sizeof(src)) != 0) {
+            send_error(session->sock, "no disc mounted (insert a disc)");
+            return;
+        }
+        const char *base = strrchr(src, '/');
+        base = base ? base + 1 : src;
+        snprintf(g_dump_dest, sizeof(g_dump_dest), "/user/data/disc_dumps/%s", base);
+        g_dump_done = g_dump_total = 0;
+        g_dump_files = 0;
+        g_dump_err[0] = g_dump_file[0] = 0;
+        g_dump_cancel = 0;
+        g_dump_active = 1;
+        pthread_t t;
+        char *arg_copy = strdup(src);
+        if (pthread_create(&t, NULL, disc_dump_worker, arg_copy) != 0) {
+            g_dump_active = 0;
+            free(arg_copy);
+            send_error(session->sock, "thread start failed");
+            return;
+        }
+        pthread_detach(t);
+        send_response(session->sock, RESP_OK, g_dump_dest, strlen(g_dump_dest));
+        return;
+    }
+    send_error(session->sock, "usage: start|status|cancel");
+}
+
+// ============================================================================
+// SCREENSHOT — sceScreenShotCapture() asks ShellUI to grab whatever is on
+// screen right now. Daemon IPC → etaHEN guard + watchdog worker.
+// ============================================================================
+static int (*g_sceScreenShotCapture)(void) = NULL;
+static int g_ss_resolved = 0;
+
+static int resolve_screenshot(void) {
+    if (g_ss_resolved) return g_sceScreenShotCapture != NULL;
+    static const char *paths[] = {
+        "/system/common/lib/libSceScreenShot.sprx",
+        "/system/priv/lib/libSceScreenShot.sprx",
+        "/preinst2/common/lib/libSceScreenShot.sprx",
+        "libSceScreenShot.sprx",
+        NULL
+    };
+    void *h = NULL;
+    for (int i = 0; paths[i] && !h; i++)
+        h = dlopen(paths[i], RTLD_NOW | RTLD_GLOBAL);
+    if (h) g_sceScreenShotCapture = (void *)dlsym(h, "sceScreenShotCapture");
+    if (!g_sceScreenShotCapture) {
+        uint32_t mod = 0;
+        if (krpc_dynlib_handle(getpid(), "libSceScreenShot.sprx", &mod) == 0 && mod)
+            g_sceScreenShotCapture = krpc_dlsym_checked(getpid(), mod, "sceScreenShotCapture");
+    }
+    g_ss_resolved = 1;
+    return g_sceScreenShotCapture != NULL;
+}
+
+// Resolve inside the watchdog worker — dlopen/krpc calls can park and must
+// never run on the command thread (a park there freezes the whole server).
+static int ss_work(int *rc) {
+    if (!resolve_screenshot()) { *rc = -98; return 0; }
+    *rc = g_sceScreenShotCapture();
+    return 0;
+}
+
+void handle_screenshot(client_session_t *session) {
+    char out[160];
+    if (!etahen_present()) {
+        send_error(session->sock, "screenshot needs etaHEN (ShellUI IPC)");
+        return;
+    }
+    int rc = -1;
+    int wrc = wdg_fn_call((void *)ss_work, &rc, NULL, NULL, NULL, 8000);
+    int n = snprintf(out, sizeof(out), "rc=%d wdg=%d", rc, wrc);
+    if (rc == 0)
+        send_response(session->sock, RESP_OK, out, n);
+    else
+        send_response(session->sock, RESP_ERROR, out, n);
+}
+
+// ============================================================================
+// NOTIFY — push a text notification to the PS5 UI (same kernel API the boot
+// messages already use; plain syscall, no daemon).
+// ============================================================================
+void handle_notify(client_session_t *session, const char *arg) {
+    if (!arg || !*arg) { send_error(session->sock, "empty message"); return; }
+    send_notification(arg);
+    send_response(session->sock, RESP_OK, "sent", 4);
+}
+
+// ============================================================================
+// PAD ACTION — lightbar RGB on the first connected DualSense.
+// Reuses the pad resolver; the open→set→close runs in one watchdog worker.
+// ============================================================================
+static int (*g_scePadSetLightBar)(int, const void *) = NULL;
+
+static int resolve_pad_actions(void) {
+    resolve_pad();
+    g_scePadSetLightBar = scePadSetLightBar;
+    return 1;
+}
+
+typedef struct {
+    int r, g, b, a;      // lightbar color
+    int rc, handle, borrowed;
+} pad_action_work_t;
+
+static int pad_action_work(pad_action_work_t *w) {
+    int user = 0;
+    sceUserServiceGetForegroundUser(&user);
+    int logins[4];
+    memset(logins, 0, sizeof(logins));
+    int login_n = sceUserServiceGetLoginUserIdList(logins);
+    if (login_n < 0) login_n = 0;
+    if (login_n > 4) login_n = 4;
+    int tries[24];
+    memset(tries, 0, sizeof(tries));
+    pad_open_any(user, logins, login_n, &w->handle, tries, &w->borrowed);
+    if (w->handle < 0) {
+        // Same story as pad info — run the action inside SceShellCore.
+        uint8_t params[4] = {0};
+        params[0] = (uint8_t)w->r; params[1] = (uint8_t)w->g;
+        params[2] = (uint8_t)w->b; params[3] = (uint8_t)w->a;
+        long rc = scp_session(1, params, 4, NULL, NULL);
+        w->rc = (int)rc;
+        w->handle = g_scp_handle;
+        w->borrowed = 1;
+        return 0;
+    }
+    w->borrowed = 0;
+    uint8_t color[4] = {(uint8_t)w->r, (uint8_t)w->g, (uint8_t)w->b, (uint8_t)w->a};
+    w->rc = g_scePadSetLightBar(w->handle, color);
+    return 0;
+}
+
+// Resolve inside the watchdog worker — see pad_full_work note above.
+static int pad_action_full_work(pad_action_work_t *w) {
+    if (!resolve_pad_actions()) { w->rc = -99; return 0; }
+    return pad_action_work(w);
+}
+
+void handle_pad_action(client_session_t *session, const char *arg) {
+    if (!arg || !*arg) { send_error(session->sock, "usage: lightbar|r,g,b"); return; }
+    if (!etahen_present()) { send_error(session->sock, "pad needs etaHEN"); return; }
+
+    pad_action_work_t w;
+    memset(&w, 0, sizeof(w));
+    if (sscanf(arg, "lightbar|%d,%d,%d", &w.r, &w.g, &w.b) == 3) {
+        w.a = 255;
+    } else {
+        send_error(session->sock, "usage: lightbar|r,g,b");
+        return;
+    }
+    int wrc = wdg_fn_call((void *)pad_action_full_work, &w, NULL, NULL, NULL, 8000);
+    char out[96];
+    int n = snprintf(out, sizeof(out), "rc=%d wdg=%d handle=%d", w.rc, wrc, w.handle);
+    if (w.rc == 0)
+        send_response(session->sock, RESP_OK, out, n);
+    else
+        send_response(session->sock, RESP_ERROR, out, n);
+}
+
+// ============================================================================
+// ICC INDICATOR LED — discovered live on the PS5 (via iccprobe/iccraw):
+//   /dev/icc_indicator
+//   0x40829505  get_dynamic_led  -> reads the 130-byte state struct
+//   0x80829504  set_dynamic_led  -> writes the same struct (ICC validates)
+//   0x8001950c  dim setting      (0..2 — same as sceKernelIccSetDynamicLedDim)
+//   0x8001950e  enable flag      (0=off, 1=on — verified on hardware)
+//   0x80019501  set_buzzer
+// State struct: bytes 0-3 = header (00 00 | count u16), then 6-byte records
+//   { u8 channel_id; u8 flag=1; u8 unk; u8 level; u8 unk2; u8 mode }
+// Channel ids verified live: 0x01=blue, 0x11=white, 0x21=amber.
+// Records float inside the blob — scan for (id,0x01) pairs, never offsets.
+// ============================================================================
+#define ICC_INDICATOR_DEV  "/dev/icc_indicator"
+#define ICC_LED_STATE_SIZE 130
+#define ICC_CH_BLUE   0x01
+#define ICC_CH_WHITE  0x11
+#define ICC_CH_AMBER  0x21
+
+static pthread_mutex_t g_led_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static int icc_dyn_get(uint8_t *st) {
+    int fd = open(ICC_INDICATOR_DEV, O_RDWR);
+    if (fd < 0) return -errno;
+    int r = ioctl(fd, 0x40829505ul, st);
+    int rc = r ? -errno : 0;
+    close(fd);
+    return rc;
+}
+
+static int icc_dyn_set(const uint8_t *st) {
+    int fd = open(ICC_INDICATOR_DEV, O_RDWR);
+    if (fd < 0) return -errno;
+    int r = ioctl(fd, 0x80829504ul, (void *)st);
+    int rc = r ? -errno : 0;
+    close(fd);
+    return rc;
+}
+
+static int icc_flag(uint8_t v) {
+    int fd = open(ICC_INDICATOR_DEV, O_RDWR);
+    if (fd < 0) return -errno;
+    uint8_t b[8] = { v, 0 };
+    int r = ioctl(fd, 0x8001950eul, b);
+    int rc = r ? -errno : 0;
+    close(fd);
+    return rc;
+}
+
+// Find a channel's 6-byte record inside the state blob; -1 if absent.
+static int icc_chan_off(const uint8_t *st, uint8_t id) {
+    for (int i = 2; i + 5 < ICC_LED_STATE_SIZE; i++)
+        if (st[i] == id && st[i + 1] == 0x01)
+            return i;
+    return -1;
+}
+
+// Read-modify-write the LED state. Levels are 0-255, -1 = leave channel.
+// All-zero is rejected by the ICC — callers wanting "off" use icc_flag(0).
+static int icc_set_levels(int blue, int white, int amber) {
+    pthread_mutex_lock(&g_led_mtx);
+    uint8_t st[ICC_LED_STATE_SIZE];
+    int rc = icc_dyn_get(st);
+    if (rc == 0) {
+        const uint8_t ids[3] = { ICC_CH_BLUE, ICC_CH_WHITE, ICC_CH_AMBER };
+        const int lv[3] = { blue, white, amber };
+        int patched = 0;
+        for (int i = 0; i < 3; i++) {
+            if (lv[i] < 0) continue;
+            int o = icc_chan_off(st, ids[i]);
+            if (o >= 0) { st[o + 3] = (uint8_t)lv[i]; patched = 1; }
+        }
+        rc = patched ? icc_dyn_set(st) : -95;
+    }
+    pthread_mutex_unlock(&g_led_mtx);
+    return rc;
+}
+
+// Effects run as a detached thread that keeps rewriting the state: the
+// dynamic-LED ioctls only carry static levels, so animations are driven in
+// software. It also re-asserts periodically in case ShellUI reclaims the LED.
+typedef struct { const char *name; int mode; int period_ms;
+                 uint8_t lvl[3]; uint8_t lvl2[3]; } led_fx_t;
+// mode 0=static hold, 1=breathe lvl2..lvl triangle, 2=alternate lvl<->lvl2
+static const led_fx_t g_led_fx[] = {
+    { "white",            0, 0,    {0x00,0xff,0x00}, {0,0,0} },
+    { "white-dim",        0, 0,    {0x00,0x40,0x00}, {0,0,0} },
+    { "blue",             0, 0,    {0xff,0x00,0x00}, {0,0,0} },
+    { "orange",           0, 0,    {0x00,0x00,0xff}, {0,0,0} },
+    { "purple",           0, 0,    {0xa0,0x00,0xff}, {0,0,0} },
+    { "pink",             0, 0,    {0x40,0x30,0xff}, {0,0,0} },
+    { "sunrise",          2, 6000, {0x00,0x00,0xff}, {0x00,0xff,0x00} },
+    { "blue-breathe",     1, 4000, {0xff,0x00,0x00}, {0x00,0x00,0x00} },
+    { "white-breathe",    1, 4000, {0x00,0xff,0x00}, {0x00,0x00,0x00} },
+    { "orange-breathe",   1, 4000, {0x00,0x00,0xff}, {0x00,0x00,0x00} },
+    { "pink-breathe",     1, 4000, {0x40,0x30,0xff}, {0x00,0x00,0x00} },
+    { "pink-breathe-fast",1, 1500, {0x40,0x30,0xff}, {0x00,0x00,0x00} },
+    { "blue-to-richblue", 1, 3000, {0xff,0x00,0x00}, {0x40,0x00,0x00} },
+    { "blue-white-anim",  2, 2000, {0xff,0x00,0x00}, {0x00,0xff,0x00} },
+};
+
+static volatile int g_ledfx_run = 0;
+static led_fx_t g_ledfx;
+
+static void led_fx_stop(void) {
+    g_ledfx_run = 0;
+    // give a running thread a moment to exit its ioctl before we reuse the dev
+    for (int i = 0; i < 20 && g_ledfx_run != -1; i++) usleep(20000);
+}
+
+static void *led_fx_thread(void *unused) {
+    (void)unused;
+    int elapsed = 0;
+    while (g_ledfx_run == 1) {
+        const led_fx_t *fx = &g_ledfx;
+        uint8_t lv[3];
+        int hold;
+        if (fx->mode == 1) {
+            int per = fx->period_ms > 100 ? fx->period_ms : 100;
+            int ph = elapsed % per;
+            float tri = ph < per / 2 ? (float)ph / (per / 2)
+                                     : (float)(per - ph) / (per / 2);
+            for (int i = 0; i < 3; i++)
+                lv[i] = (uint8_t)(fx->lvl2[i] + (fx->lvl[i] - fx->lvl2[i]) * tri);
+            hold = 80000;
+        } else if (fx->mode == 2) {
+            int ph = (elapsed / (fx->period_ms > 1 ? fx->period_ms / 2 : 1)) & 1;
+            const uint8_t *src = ph ? fx->lvl2 : fx->lvl;
+            memcpy(lv, src, sizeof(lv));
+            hold = 80000;
+        } else {
+            memcpy(lv, fx->lvl, sizeof(lv));
+            hold = 500000;  // static: just re-assert every 500ms
+        }
+        if (icc_set_levels(lv[0], lv[1], lv[2]) != 0)
+            usleep(400000);
+        usleep(hold);
+        elapsed += 80;
+    }
+    g_ledfx_run = -1;  // thread exited
+    return NULL;
+}
+
+static int led_fx_start(const led_fx_t *fx) {
+    led_fx_stop();
+    g_ledfx = *fx;
+    g_ledfx_run = 1;
+    pthread_t t;
+    if (pthread_create(&t, NULL, led_fx_thread, NULL) != 0) {
+        g_ledfx_run = 0;
+        return -1;
+    }
+    pthread_detach(t);
+    return 0;
+}
+
+// ============================================================================
+// ICC CONTROL — hardware beeper + power LED through libkernel ICC functions.
+// Verified by live-hardware research (ps5-beeper-LED-Controller): all four
+// symbols resolve from libkernel via kernel_dynlib and take a plain int.
+//   sceKernelIccSetBuzzer(0..3)           — beep pattern (once)
+//   sceKernelIccSetBuzzerDimSetting(0..2) — beeper volume (persistent)
+//   sceKernelIccSetBuzzerOffSetting(0/1)  — beeper mute (persistent)
+//   sceKernelIccSetDynamicLedDimSetting(0..2) — LED brightness (persistent)
+// Per-channel color and effects go through /dev/icc_indicator's
+// get/set_dynamic_led ioctls (see the ICC INDICATOR LED section above).
+// ============================================================================
+static int (*g_iccSetBuzzer)(int) = NULL;
+static int (*g_iccSetBuzzerDim)(int) = NULL;
+static int (*g_iccSetBuzzerOff)(int) = NULL;
+static int (*g_iccSetLedDim)(int) = NULL;
+static int g_icc_resolved = 0;
+
+static intptr_t krpc_resolve_any(const char *sym) {
+    // libkernel exports live under handle 1 for our process (same trick the
+    // beeper-LED research used); also probe the kernel module handles. Every
+    // result goes through mapbase validation — kernel errno codes otherwise
+    // look like valid pointers and SIGSEGV the whole process when called.
+    void *p = krpc_dlsym_checked(getpid(), 1, sym);
+    if (p) return (intptr_t)p;
+    static const char *mods[] = {
+        "libkernel_sys.sprx", "libkernel_web.sprx", "libkernel.sprx", NULL
+    };
+    for (int i = 0; mods[i]; i++) {
+        uint32_t h = 0;
+        if (krpc_dynlib_handle(getpid(), mods[i], &h) == 0 && h) {
+            p = krpc_dlsym_checked(getpid(), h, sym);
+            if (p) return (intptr_t)p;
+        }
+    }
+    return 0;
+}
+
+static void resolve_icc(void) {
+    if (g_icc_resolved) return;
+    g_iccSetBuzzer    = (void *)krpc_resolve_any("sceKernelIccSetBuzzer");
+    g_iccSetBuzzerDim = (void *)krpc_resolve_any("sceKernelIccSetBuzzerDimSetting");
+    g_iccSetBuzzerOff = (void *)krpc_resolve_any("sceKernelIccSetBuzzerOffSetting");
+    g_iccSetLedDim    = (void *)krpc_resolve_any("sceKernelIccSetDynamicLedDimSetting");
+    g_icc_resolved = 1;
+}
+
+// Bounded ioctl probe for icc_indicator: PS5 renumbered the PS4 ioctls.
+// Sweep group 0x95, nr 0..15, with IOC_IN and IOC_INOUT at the common arg
+// sizes — IOC_VOID is deliberately skipped (PS4's standby/shutdown cmds
+// live there). Anything not returning ENOTTY is a real command; hits are
+// reported as cmd=errno pairs. IN cmds get a zeroed 256-byte buffer, which
+// for a setter just writes zeros to LED state — harmless.
+static void icc_probe_sweep(char *out, size_t n) {
+    static const int sizes[] = { 1, 4, 8, 26, 64, 128, 130, 256 };
+    int off = 0;
+    int fd = open(ICC_INDICATOR_DEV, O_RDWR);
+    if (fd < 0) { snprintf(out, n, "open failed errno=%d", errno); return; }
+    uint8_t *buf = calloc(1, 256);
+    for (unsigned dir = 0; dir < 2; dir++) {
+        uint32_t dirbits = dir ? 0xC0000000u : 0x80000000u;  // INOUT : IN
+        for (int nr = 0; nr < 16; nr++)
+            for (unsigned si = 0; si < sizeof(sizes)/sizeof(sizes[0]); si++) {
+                uint32_t cmd = dirbits | ((uint32_t)sizes[si] << 16)
+                             | (0x95u << 8) | (uint32_t)nr;
+                memset(buf, 0, 256);
+                errno = 0;
+                int r = ioctl(fd, cmd, buf);
+                int e = r == 0 ? 0 : errno;
+                if (r == 0 || e != ENOTTY)
+                    off += snprintf(out + off, n - off, "%08x=%d ",
+                                    (unsigned)cmd, e);
+                if (off > (int)n - 40) goto done;
+            }
+    }
+done:
+    free(buf);
+    close(fd);
+    if (off == 0) snprintf(out, n, "no hits");
+}
+
+// resolve_icc() issues kernel RPCs that can park — run it plus the call
+// inside a watchdog worker so the command thread never blocks here.
+typedef struct { char sub[32]; char opt[1050]; int v, v2, v3; int rc;
+                 char probe[1024]; } icc_work_t;
+
+// "iccraw|0xCMDHEX:deadbeef..." — send an arbitrary hex arg buffer to an
+// arbitrary ioctl on /dev/icc_indicator. Debug command: lets us discover the
+// real argument layout without rebuilding for every guess. Replies with
+// rc + errno + hexdump of the buffer after the call (for IOC_OUT cmds).
+static int hex_nib(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void icc_raw_ioctl(icc_work_t *w, const char *spec) {
+    // spec = "<cmd_hex>:<data_hex>"
+    char *colon = spec ? strchr(spec, ':') : NULL;
+    unsigned long cmd = strtoul(spec ? spec : "", NULL, 0);
+    w->probe[0] = 0;
+    if (!colon || !cmd) { snprintf(w->probe, sizeof(w->probe), "bad spec"); w->rc = -97; return; }
+    const char *hx = colon + 1;
+    uint8_t buf[512];
+    memset(buf, 0, sizeof(buf));
+    size_t blen = 0;
+    while (hx[0] && hx[1] && blen < sizeof(buf)) {
+        int hi = hex_nib(hx[0]), lo = hex_nib(hx[1]);
+        if (hi < 0 || lo < 0) break;
+        buf[blen++] = (uint8_t)((hi << 4) | lo);
+        hx += 2;
+    }
+    int fd = open(ICC_INDICATOR_DEV, O_RDWR);
+    if (fd < 0) { snprintf(w->probe, sizeof(w->probe), "open errno=%d", errno); w->rc = -1; return; }
+    errno = 0;
+    int r = ioctl(fd, cmd, buf);
+    int e = r ? errno : 0;
+    close(fd);
+    int off = snprintf(w->probe, sizeof(w->probe), "r=%d errno=%d out=", r, e);
+    for (size_t i = 0; i < 160 && off < (int)sizeof(w->probe) - 3; i++)
+        off += snprintf(w->probe + off, sizeof(w->probe) - off, "%02x", buf[i]);
+    w->rc = r;
+}
+
+static int icc_work(icc_work_t *w) {
+    resolve_icc();
+    w->rc = -99;
+    int v = w->v, v2 = w->v2, v3 = w->v3;
+    if (!strcmp(w->sub, "iccprobe")) {
+        icc_probe_sweep(w->probe, sizeof(w->probe));
+        w->rc = 0;
+        return 0;
+    }
+    if (!strcmp(w->sub, "iccraw")) {
+        icc_raw_ioctl(w, w->opt);
+        return 0;
+    }
+    if (!strcmp(w->sub, "led")) {
+        if (g_iccSetLedDim) w->rc = g_iccSetLedDim(v);
+    } else if (!strcmp(w->sub, "buzzer")) {
+        if (g_iccSetBuzzer) w->rc = g_iccSetBuzzer(v);
+    } else if (!strcmp(w->sub, "buzzervol")) {
+        if (g_iccSetBuzzerDim) w->rc = g_iccSetBuzzerDim(v);
+    } else if (!strcmp(w->sub, "buzzermute")) {
+        if (g_iccSetBuzzerOff) w->rc = g_iccSetBuzzerOff(v);
+    } else if (!strcmp(w->sub, "ledcolor")) {
+        // ledcolor|b,w,o — live channel levels (0x01 blue / 0x11 white /
+        // 0x21 amber). All-zero means "off" -> drop the enable flag.
+        if (v <= 0 && v2 <= 0 && v3 <= 0) {
+            led_fx_stop();
+            w->rc = icc_flag(0);
+        } else {
+            led_fx_t fx = { "custom", 0, 0,
+                            { (uint8_t)(v>0?v:0), (uint8_t)(v2>0?v2:0),
+                              (uint8_t)(v3>0?v3:0) }, {0,0,0} };
+            w->rc = icc_flag(1);
+            if (w->rc == 0) w->rc = led_fx_start(&fx);
+        }
+    } else if (!strcmp(w->sub, "ledeffect")) {
+        if (!strcmp(w->opt, "off")) {
+            led_fx_stop();
+            w->rc = icc_flag(0);
+        } else if (!strcmp(w->opt, "auto")) {
+            // hand the indicator back to ShellUI
+            led_fx_stop();
+            w->rc = icc_flag(1);
+        } else {
+            const led_fx_t *fx = NULL;
+            for (size_t i = 0; i < sizeof(g_led_fx)/sizeof(g_led_fx[0]); i++)
+                if (!strcmp(g_led_fx[i].name, w->opt)) { fx = &g_led_fx[i]; break; }
+            if (!fx) w->rc = -98;
+            else {
+                w->rc = icc_flag(1);
+                if (w->rc == 0) w->rc = led_fx_start(fx);
+            }
+        }
+    }
+    return 0;
+}
+
+void handle_icc_control(client_session_t *session, const char *arg) {
+    icc_work_t w;
+    memset(&w, 0, sizeof(w));
+    w.v = w.v2 = w.v3 = -1;
+    sscanf(arg ? arg : "", "%31[^|]|%1049s", w.sub, w.opt);
+    sscanf(w.opt, "%d,%d,%d", &w.v, &w.v2, &w.v3);
+
+    int wrc = wdg_fn_call((void *)icc_work, &w, NULL, NULL, NULL, 8000);
+    char out[1536];
+    int n = snprintf(out, sizeof(out), "%s rc=%d wdg=%d (buzz=%p dim=%p off=%p led=%p dev=%d fx=%d)",
+        w.sub, w.rc, wrc, (void*)g_iccSetBuzzer, (void*)g_iccSetBuzzerDim,
+        (void*)g_iccSetBuzzerOff, (void*)g_iccSetLedDim,
+        access(ICC_INDICATOR_DEV, F_OK) == 0, g_ledfx_run);
+    if (w.probe[0] && n < (int)sizeof(out) - 20)
+        n += snprintf(out + n, sizeof(out) - n, " probe=[%s]", w.probe);
+    if (w.rc == 0)
+        send_response(session->sock, RESP_OK, out, n);
+    else
+        send_response(session->sock, RESP_ERROR, out, n);
+}
 
 // SAVE_DELETE — delete a save image + companion .bin from the console.
 void handle_save_delete(client_session_t *session, const char *path) {
@@ -9043,7 +10994,10 @@ void handle_shell_close(client_session_t *session) {
 // Handle client
 void *client_thread(void *arg) {
     client_session_t *session = (client_session_t *)arg;
-    uint8_t *buffer = malloc(BUFFER_SIZE);
+    // +1: the buffer is reused across commands and handlers treat `data` as a
+    // C string — without a terminator, strlen() reads a stale byte from the
+    // previous command (visible as a garbage char appended to notifications).
+    uint8_t *buffer = malloc(BUFFER_SIZE + 1);
     
     if (!buffer) {
         close(session->sock);
@@ -9089,6 +11043,7 @@ void *client_thread(void *arg) {
             if (received != data_len) {
                 break;
             }
+            data[data_len] = 0;
         }
         
         // Handle command
@@ -9264,6 +11219,60 @@ void *client_thread(void *arg) {
                 break;
             case CMD_KLOG_READ:
                 handle_klog_read(session, data ? (const char *)data : "");
+                break;
+            case CMD_APP_LIST_V2:
+                handle_app_list_v2(session);
+                break;
+            case CMD_APP_SUSPEND:
+                if (data) handle_app_suspend(session, (const char *)data);
+                else send_error(session->sock, "Usage: app_id");
+                break;
+            case CMD_APP_RESUME:
+                if (data) handle_app_resume(session, (const char *)data);
+                else send_error(session->sock, "Usage: app_id");
+                break;
+            case CMD_APP_KILL:
+                if (data) handle_app_kill(session, (const char *)data);
+                else send_error(session->sock, "Usage: app_id");
+                break;
+            case CMD_APP_COREDUMP:
+                if (data) handle_app_coredump(session, (const char *)data);
+                else send_error(session->sock, "Usage: app_id");
+                break;
+            case CMD_NET_INFO:
+                handle_net_info(session);
+                break;
+            case CMD_NET_SPEEDTEST:
+                handle_net_speedtest(session);
+                break;
+            case CMD_POWER_ACTION:
+                if (data) handle_power_action(session, (const char *)data);
+                else send_error(session->sock, "Usage: reboot|shutdown");
+                break;
+            case CMD_USB_LIST:
+                handle_usb_list(session);
+                break;
+            case CMD_PAD_INFO:
+                handle_pad_info(session);
+                break;
+            case CMD_DISC_DUMP:
+                if (data) handle_disc_dump(session, (const char *)data);
+                else send_error(session->sock, "Usage: start|status|cancel");
+                break;
+            case CMD_SCREENSHOT:
+                handle_screenshot(session);
+                break;
+            case CMD_NOTIFY:
+                if (data) handle_notify(session, (const char *)data);
+                else send_error(session->sock, "No message provided");
+                break;
+            case CMD_PAD_ACTION:
+                if (data) handle_pad_action(session, (const char *)data);
+                else send_error(session->sock, "Usage: lightbar|r,g,b | vibrate|l,s");
+                break;
+            case CMD_ICC_CONTROL:
+                if (data) handle_icc_control(session, (const char *)data);
+                else send_error(session->sock, "Usage: led|n buzzer|n buzzervol|n buzzermute|n ledcolor|b,w,o");
                 break;
             case CMD_LAUNCH_GAME:
                 if (data) {

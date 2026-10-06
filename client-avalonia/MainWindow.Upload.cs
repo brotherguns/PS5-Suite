@@ -122,6 +122,19 @@ namespace PS5Upload
             if (_localFiles.Count == 0) { await ShowMessageAsync("No files selected for upload"); return; }
             if (!_protocol.IsConnected) { await ShowMessageAsync("Not connected to PS5", "Error"); return; }
 
+            // Queued a WHOLE NAS share? Enumerating it recursively can mean
+            // thousands of files over SMB — confirm before burning the time.
+            var shareRoots = _localFiles.Where(f => f.IsDirectory && LocalIo.IsUnc(f.FullPath)
+                && NasManager.Normalize(f.FullPath).TrimEnd('\\').Equals(NasManager.ShareRoot(f.FullPath), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (shareRoots.Count > 0)
+            {
+                if (!await ShowConfirmAsync(
+                    "You're uploading ENTIRE share(s):\n  " + string.Join("\n  ", shareRoots.Select(f => f.FullPath)) +
+                    "\n\nThis will enumerate every file on the share (can take a while).\nTip: double-click it and pick the files/folders you actually want.\n\nContinue anyway?",
+                    "Upload Entire Share?"))
+                    return;
+            }
+
             UploadButton.IsEnabled = false;
             CancelButton.IsEnabled = true;
             ProgressPanel.IsVisible = true;
@@ -134,17 +147,18 @@ namespace PS5Upload
             TotalProgressText.Text = "Collecting files...";
 
             Log("Collecting files...");
+            var ct = _uploadCancellation.Token;
             var allFiles = await Task.Run(() =>
             {
                 var files = new List<(string localPath, string remotePath)>();
                 foreach (var item in localFilesCopy)
                 {
                     string targetBasePath = item.RemotePathOverride ?? (currentPath + "/" + item.Name);
-                    if (item.IsDirectory) CollectFilesFromDirectory(item.FullPath, targetBasePath, files);
+                    if (item.IsDirectory) CollectFilesFromDirectory(item.FullPath, targetBasePath, files, ct);
                     else files.Add((item.FullPath, targetBasePath));
                 }
                 return files;
-            });
+            }, ct);
 
             Log("Checking for existing files...");
             var filesToUpload = await FilterDuplicateFilesAsync(allFiles);
@@ -158,7 +172,7 @@ namespace PS5Upload
             allFiles = filesToUpload;
 
             _totalFilesToUpload = allFiles.Count;
-            _totalBytesToUpload = await Task.Run(() => { long total = 0; foreach (var f in allFiles) { try { total += new FileInfo(f.localPath).Length; } catch { } } return total; });
+            _totalBytesToUpload = await Task.Run(() => { long total = 0; foreach (var f in allFiles) { try { total += LocalIo.GetLength(f.localPath); } catch { } } return total; });
             _totalBytesUploaded = 0; _completedFiles = 0; _uploadStartTime = DateTime.Now;
             _fileProgressBytes.Clear(); _fileChunkProgressBytes.Clear(); _chunkLogLastBytes.Clear();
             _smoothedETA = TimeSpan.Zero; _speedWindowIndex = 0; _speedWindowCount = 0; _currentSpeed = 0;
@@ -251,7 +265,7 @@ namespace PS5Upload
                     while (fileQueue.Count > 0 && activeTasks.Count < MaxParallelUploads)
                     {
                         var (localPath, remotePath) = fileQueue.Dequeue();
-                        long fileSize = new FileInfo(localPath).Length;
+                        long fileSize = LocalIo.GetLength(localPath);
                         bool isLargeFile = fileSize > LargeFileThresholdBytes;
                         bool isHugeFile = fileSize >= HugeFileThresholdBytes;
 
@@ -267,6 +281,7 @@ namespace PS5Upload
 
                         var task = UploadFileParallelAsync(connection, localPath, remotePath, _uploadCancellation.Token);
                         activeTasks.Add(task); taskToConnection[task] = connection; taskToFilePath[task] = localPath; taskToRemotePath[task] = remotePath;
+                        _activeTaskCount = activeTasks.Count;
                         taskIsLargeFile[task] = isLargeFile; taskIsHugeFile[task] = isHugeFile;
                         fileChunkCounts[localPath] = 1; fileChunksCompleted[localPath] = 0;
                     }
@@ -367,24 +382,24 @@ namespace PS5Upload
             try
             {
                 string fileName = Path.GetFileName(localPath);
-                FileInfo fileInfo = new FileInfo(localPath);
+                long fileLen = LocalIo.GetLength(localPath);
 
-                if (fileInfo.Length > ChunkThresholdBytes)
+                if (fileLen > ChunkThresholdBytes)
                 {
-                    int maxParallelChunks = fileInfo.Length >= HugeFileThresholdBytes ? MaxParallelChunksForHugeFile : MaxParallelChunksForLargeFile;
-                    long chunkSize = fileInfo.Length >= HugeFileThresholdBytes ? HugeFileChunkSizeBytes : DefaultChunkSizeBytes;
+                    int maxParallelChunks = fileLen >= HugeFileThresholdBytes ? MaxParallelChunksForHugeFile : MaxParallelChunksForLargeFile;
+                    long chunkSize = fileLen >= HugeFileThresholdBytes ? HugeFileChunkSizeBytes : DefaultChunkSizeBytes;
 
                     // Scale chunk size so medium files still get parallel lanes:
                     // a 140MB file shouldn't fall back to 1 chunk / 1 lane while
                     // a 10GB file grabs 10 workers.
-                    long scaledChunk = fileInfo.Length / maxParallelChunks;
+                    long scaledChunk = fileLen / maxParallelChunks;
                     long minChunk = 64L * 1024 * 1024;
                     if (scaledChunk < minChunk) scaledChunk = minChunk;
                     if (scaledChunk < chunkSize) chunkSize = scaledChunk;
 
-                    long totalChunks = (fileInfo.Length + chunkSize - 1) / chunkSize;
+                    long totalChunks = (fileLen + chunkSize - 1) / chunkSize;
                     int workerCount = (int)Math.Min(totalChunks, Math.Max(1, maxParallelChunks));
-                    Log($"⬆️ Uploading (chunked): {fileName} ({FormatFileSize(fileInfo.Length)}) {workerCount} lanes");
+                    Log($"⬆️ Uploading (chunked): {fileName} ({FormatFileSize(fileLen)}) {workerCount} lanes");
                     _fileProgressBytes[localPath] = 0;
                     _fileChunkProgressBytes[localPath] = new ConcurrentDictionary<long, long>();
                     _chunkLogLastBytes[localPath] = 0;
@@ -443,12 +458,12 @@ namespace PS5Upload
                     async Task DoChunk(PS5Protocol wConn, int chunkIndex, Action? readyCallback)
                     {
                         long offset = chunkIndex * chunkSize;
-                        long size = Math.Min(chunkSize, fileInfo.Length - offset);
+                        long size = Math.Min(chunkSize, fileLen - offset);
                         long humanIdx = chunkIndex + 1;
                         var prog = MakeChunkProgress(offset, size, humanIdx, totalChunks);
                         bool ok = await wConn.UploadFileAsync(localPath, remotePath, prog, cancellationToken, offset, size, readyCallback);
                         if (!ok) throw new Exception($"Chunk {humanIdx}/{totalChunks} failed for {fileName}");
-                        if (_fileChunkProgressBytes.TryGetValue(localPath, out var cm)) { cm[offset] = size; long agg = cm.Values.Sum(); long prev = _fileProgressBytes.GetOrAdd(localPath, 0); long d = agg - prev; if (d > 0) { Interlocked.Add(ref _totalBytesUploaded, d); _fileProgressBytes[localPath] = agg; } _currentFileBytes = agg; _currentFileTotalBytes = fileInfo.Length; }
+                        if (_fileChunkProgressBytes.TryGetValue(localPath, out var cm)) { cm[offset] = size; long agg = cm.Values.Sum(); long prev = _fileProgressBytes.GetOrAdd(localPath, 0); long d = agg - prev; if (d > 0) { Interlocked.Add(ref _totalBytesUploaded, d); _fileProgressBytes[localPath] = agg; } _currentFileBytes = agg; _currentFileTotalBytes = fileLen; }
                     }
 
                     IProgress<UploadProgress> MakeChunkProgress(long chunkOffset, long chunkLength, long chunkNumber, long totalChunkCount)
@@ -462,13 +477,13 @@ namespace PS5Upload
                             long sent = p.BytesSent - chunkOffset; if (sent < 0) sent = 0; if (sent > chunkLength) sent = chunkLength;
                             var map = _fileChunkProgressBytes.GetOrAdd(localPath, _ => new ConcurrentDictionary<long, long>());
                             map[chunkOffset] = sent;
-                            if (callCount % 10 != 0 && sent != chunkLength) return;
+                            if (callCount % 2 != 0 && sent != chunkLength) return;
                             long agg = map.Values.Sum();
                             long prev = _fileProgressBytes.GetOrAdd(localPath, 0); long delta = agg - prev;
                             if (delta != 0) { Interlocked.Add(ref _totalBytesUploaded, delta); _fileProgressBytes[localPath] = agg; }
                             _currentFileName = fileName;
                             Interlocked.Exchange(ref _currentFileBytes, agg);
-                            Interlocked.Exchange(ref _currentFileTotalBytes, fileInfo.Length);
+                            Interlocked.Exchange(ref _currentFileTotalBytes, fileLen);
                         });
                     }
                 }
@@ -478,10 +493,10 @@ namespace PS5Upload
                     var progress = new InlineProgress<UploadProgress>(p =>
                     {
                         callCount++;
-                        if (callCount % 10 != 0 && p.BytesSent != p.TotalBytes) return;
+                        if (callCount % 2 != 0 && p.BytesSent != p.TotalBytes) return;
                         _currentFileName = fileName;
                         Interlocked.Exchange(ref _currentFileBytes, p.BytesSent);
-                        Interlocked.Exchange(ref _currentFileTotalBytes, fileInfo.Length);
+                        Interlocked.Exchange(ref _currentFileTotalBytes, fileLen);
                         long prev = _fileProgressBytes.GetOrAdd(localPath, 0); long add = p.BytesSent - prev;
                         if (add > 0) { Interlocked.Add(ref _totalBytesUploaded, add); _fileProgressBytes[localPath] = p.BytesSent; }
                     });
@@ -491,25 +506,26 @@ namespace PS5Upload
                         string detail = connection.LastError;
                         throw new Exception(string.IsNullOrEmpty(detail) ? $"Upload failed for {fileName}" : $"Upload failed for {fileName}: {detail}");
                     }
-                    long prevB = _fileProgressBytes.GetOrAdd(localPath, 0); long d2 = fileInfo.Length - prevB;
-                    if (d2 > 0) { Interlocked.Add(ref _totalBytesUploaded, d2); _fileProgressBytes[localPath] = fileInfo.Length; }
+                    long prevB = _fileProgressBytes.GetOrAdd(localPath, 0); long d2 = fileLen - prevB;
+                    if (d2 > 0) { Interlocked.Add(ref _totalBytesUploaded, d2); _fileProgressBytes[localPath] = fileLen; }
                 }
 
                 _fileProgressBytes.TryRemove(localPath, out _); _fileChunkProgressBytes.TryRemove(localPath, out _); _chunkLogLastBytes.TryRemove(localPath, out _);
-                if (fileInfo.Length < 10 * 1024 * 1024) TrackSmallFileCompletion(fileName, fileInfo.Length); else Log($"✅ Upload complete: {fileName}");
+                if (fileLen < 10 * 1024 * 1024) TrackSmallFileCompletion(fileName, fileLen); else Log($"✅ Upload complete: {fileName}");
                 // Batch into pending list — the UI timer drains them. A post +
                 // collection-change + layout pass per file froze the window
                 // on 100k-file uploads.
                 lock (_pendingHistoryLock)
-                    _pendingHistory.Add(new TransferHistoryItem { FileName = fileName, Status = "✅ Completed", Size = FormatFileSize(fileInfo.Length), Timestamp = DateTime.Now });
+                    _pendingHistory.Add(new TransferHistoryItem { FileName = fileName, Status = "✅ Completed", Size = FormatFileSize(fileLen), Timestamp = DateTime.Now });
             }
             catch (Exception ex)
             {
                 string fn = Path.GetFileName(localPath);
                 Log($"❌ Exception uploading {fn}: {ex.Message}");
                 _fileProgressBytes.TryRemove(localPath, out _); _fileChunkProgressBytes.TryRemove(localPath, out _); _chunkLogLastBytes.TryRemove(localPath, out _);
+                long failSize = 0; try { failSize = LocalIo.GetLength(localPath); } catch { }
                 lock (_pendingHistoryLock)
-                    _pendingHistory.Add(new TransferHistoryItem { FileName = fn, Status = "❌ Failed", Size = FormatFileSize(new FileInfo(localPath).Length), Timestamp = DateTime.Now, LocalPath = localPath, RemotePath = remotePath });
+                    _pendingHistory.Add(new TransferHistoryItem { FileName = fn, Status = "❌ Failed", Size = FormatFileSize(failSize), Timestamp = DateTime.Now, LocalPath = localPath, RemotePath = remotePath });
                 throw;
             }
         }
@@ -540,10 +556,29 @@ namespace PS5Upload
         private void DestroyConnection(PS5Protocol c) { try { c.Disconnect(); c.Dispose(); } catch { } finally { Interlocked.Decrement(ref _currentPoolConnections); } }
         private void DrainConnectionPool() { while (_connectionPool.TryDequeue(out var c)) DestroyConnection(c); }
 
-        private void CollectFilesFromDirectory(string localDir, string remoteDir, List<(string localPath, string remotePath)> files)
+        private void CollectFilesFromDirectory(string localDir, string remoteDir, List<(string localPath, string remotePath)> files, CancellationToken ct = default)
         {
-            foreach (string file in Directory.GetFiles(localDir)) { FileInfo info = new(file); files.Add((file, remoteDir + "/" + info.Name)); }
-            foreach (string dir in Directory.GetDirectories(localDir)) { DirectoryInfo info = new(dir); CollectFilesFromDirectory(dir, remoteDir + "/" + info.Name, files); }
+            ct.ThrowIfCancellationRequested();
+            foreach (var e in LocalIo.Enumerate(localDir))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (e.IsDirectory) CollectFilesFromDirectory(e.FullPath, remoteDir + "/" + e.Name, files, ct);
+                else
+                {
+                    files.Add((e.FullPath, remoteDir + "/" + e.Name));
+                    // Live collect counter — recursive NAS enumeration over
+                    // thousands of files must not look like a freeze.
+                    if (files.Count % 200 == 0)
+                    {
+                        int n = files.Count;
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            TotalProgressText.Text = $"Collecting files... ({n} found)";
+                            UploadFileNameText.Text = e.Name;
+                        });
+                    }
+                }
+            }
         }
 
         private void TrackSmallFileCompletion(string fileName, long fileSize)
@@ -590,7 +625,7 @@ namespace PS5Upload
                         else if (_duplicateAction == DuplicateAction.SkipAll) { /* skip */ }
                         else
                         {
-                            long localSize = new FileInfo(file.localPath).Length;
+                            long localSize = LocalIo.GetLength(file.localPath);
                             long remoteSize = existingFiles[fn!];
                             var dlg = new DuplicateFileDialog(fn!, localSize, remoteSize);
                             await dlg.ShowDialog(this);

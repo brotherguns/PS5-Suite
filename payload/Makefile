@@ -18,7 +18,7 @@ all: $(ELF)
 # (NOT kernel_web: externs like sceKernelGetCpuTemperature don't exist in the
 # runtime web variant and would make the ELF fail to launch).
 $(ELF): main.c
-	$(CC) $(CFLAGS) -o $@ $^ -lkernel_sys -lSceSystemService -lSceUserService -lSceAppInstUtil -lsqlite3
+	$(CC) $(CFLAGS) -o $@ $^ -lkernel_sys -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNetCtl -lScePad -lsqlite3
 	$(PS5_PAYLOAD_SDK)/bin/llvm-strip $@
 
 # Push the freshly built payload straight to the console (elfldr must be

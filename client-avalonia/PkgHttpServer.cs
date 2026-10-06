@@ -43,7 +43,7 @@ namespace PS5Upload
         /// Keys are stored UNescaped because requests are unescaped before lookup.</summary>
         public string AddFile(string localPath)
         {
-            var name = Path.GetFileName(localPath);
+            var name = LocalIo.GetName(localPath);
             _files["/" + name] = localPath;
             return "/" + Uri.EscapeDataString(name);
         }
@@ -124,8 +124,7 @@ namespace PS5Upload
                             return;
                         }
 
-                        var fi = new FileInfo(localPath);
-                        long total = fi.Length, start = 0, end = total - 1;
+                        long total = LocalIo.GetLength(localPath), start = 0, end = total - 1;
                         bool partial = false;
 
                         // Parse "Range: bytes=a-b" / "bytes=a-" / "bytes=-n".
@@ -174,7 +173,7 @@ namespace PS5Upload
 
                         if (method == "GET")
                         {
-                            using var fs = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                            using var fs = LocalIo.OpenRead(localPath, randomAccess: true);
                             fs.Seek(start, SeekOrigin.Begin);
                             var buf = new byte[1024 * 1024];
                             long remain = len;

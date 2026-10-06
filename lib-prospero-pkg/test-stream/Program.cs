@@ -24,12 +24,19 @@ if (args.Length >= 1 && args[0] == "inodeoff")
     return InodeOffsetCheck();
 if (args.Length >= 3 && args[0] == "realbuild")
     return RealBuild(args[1], args[2]);
+if (args.Length >= 3 && args[0] == "homebrew")
+    return HomebrewBuild(args[1], args[2]);
+if (args.Length >= 3 && args[0] == "fself")
+    return FselfWrap(args[1], args[2]);
+if (args.Length >= 2 && args[0] == "cntdump")
+    return CntDump(args[1]);
 
 Console.WriteLine("usage: test-stream verify <pkg> <srcFolder> <outDir> [passcode]\n" +
                   "       test-stream diag <pkg> [passcode]\n" +
                   "       test-stream napsrt   (synthetic inner-image -> naps -> mount round-trip)\n" +
                   "       test-stream pkgbuild [srcBytes]  (full build -> extract -> diff round-trip)\n" +
-                  "       test-stream inodeoff (inode LogicalOffset >4GiB serialization check)");
+                  "       test-stream inodeoff (inode LogicalOffset >4GiB serialization check)\n" +
+                  "       test-stream homebrew <srcFolder> <outDir>  (license-free debug fPKG via ProsperoHomebrewPackager)");
 return 0;
 
 // ---------- napsrt: inner-image -> naps -> mount reconstruction round-trip ----------
@@ -656,6 +663,52 @@ static int RealBuild(string srcFolder, string outDir)
     if (result == null || string.IsNullOrEmpty(result.OutputPath)) { Console.WriteLine("BUILD FAILED"); return 1; }
     Console.WriteLine($"built: {result.OutputPath} ({new FileInfo(result.OutputPath).Length:N0} bytes)");
     foreach (var w in result.Warnings) Console.WriteLine($"  warning: {w}");
+    return 0;
+}
+
+// ---------- homebrew: license-free debug fPKG via ProsperoHomebrewPackager ----------
+static int HomebrewBuild(string homebrewFolder, string outDir)
+{
+    var opts = new ProsperoHomebrewPackageOptions
+    {
+        HomebrewFolder = homebrewFolder,
+        OutputFolder = outDir,
+        KeepStaging = false,
+    };
+    var result = ProsperoHomebrewPackager.Package(opts, m => Console.WriteLine($"  | {m}"));
+    if (result == null || string.IsNullOrEmpty(result.OutputPath)) { Console.WriteLine("BUILD FAILED"); return 1; }
+    Console.WriteLine($"built: {result.OutputPath} ({new FileInfo(result.OutputPath).Length:N0} bytes)");
+    Console.WriteLine($"launch ready: {(result.LaunchReadiness.IsLaunchReady ? "yes" : "NO")}");
+    foreach (var i in result.LaunchReadiness.Issues) Console.WriteLine($"  issue: {i}");
+    foreach (var w in result.Warnings) Console.WriteLine($"  warning: {w}");
+    return result.LaunchReadiness.IsLaunchReady ? 0 : 1;
+}
+
+// ---------- cntdump: list container header + entries ----------
+static int CntDump(string pkgPath)
+{
+    var pkg = ProsperoPkgReader.Read(pkgPath);
+    Console.WriteLine($"type={pkg.Type}");
+    if (pkg.Header is { } h)
+        Console.WriteLine($"flags=0x{h.Flags:X8} entries={h.EntryCount} scEntries={h.ScEntryCount} " +
+                          $"contentId={h.ContentId} drm=0x{h.DrmType:X} ctype=0x{h.ContentType:X} cflags=0x{h.ContentFlags:X8}");
+    if (pkg.Fih is { } f)
+        Console.WriteLine($"FIH: signed=0x{f.SignedByte:X2} fmt={f.FormatVersion} pfs@0x{f.PfsImageOffset:X}+0x{f.PfsImageSize:X} cnt@0x{f.EmbeddedCntOffset:X}");
+    foreach (var e in pkg.Entries)
+        Console.WriteLine($"  id=0x{e.RawId:X4} name={e.Name ?? "(unnamed)"} off=0x{e.DataOffset:X} size=0x{e.DataSize:X} " +
+                          $"enc={(e.Encrypted ? 1 : 0)} keyIdx={e.KeyIndex} f1=0x{e.Flags1:X8} f2=0x{e.Flags2:X8}");
+    return 0;
+}
+
+
+
+// ---------- fself: wrap a raw ELF module in the PS5 SELF container ----------
+static int FselfWrap(string inElf, string outFile)
+{
+    var elf = File.ReadAllBytes(inElf);
+    var fself = LibProsperoPkg.Content.ProsperoFself.MakeFself(elf);
+    File.WriteAllBytes(outFile, fself);
+    Console.WriteLine($"fself: {inElf} ({elf.Length} B) -> {outFile} ({fself.Length} B), magic={BinaryPrimitives.ReadUInt32LittleEndian(fself):X8}");
     return 0;
 }
 

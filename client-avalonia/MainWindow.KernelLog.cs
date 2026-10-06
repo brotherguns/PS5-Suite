@@ -35,6 +35,8 @@ namespace PS5Upload
                 return;
             }
             KlogText.Text = txt;
+            if (KlogAutoScroll.IsChecked == true)
+                KlogText.CaretIndex = txt.Length;
             KlogStatus.Text = $"{txt.Length:N0} bytes · {DateTime.Now:HH:mm:ss}";
         }
 
@@ -63,6 +65,8 @@ namespace PS5Upload
             if (txt != null)
             {
                 KlogText.Text = txt;
+                if (KlogAutoScroll.IsChecked == true)
+                    KlogText.CaretIndex = txt.Length;
                 KlogStatus.Text = $"{txt.Length:N0} bytes · {DateTime.Now:HH:mm:ss} (auto)";
             }
         }

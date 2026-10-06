@@ -549,6 +549,9 @@ namespace PS5Upload
                         else HwThermalAlertText.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#28A745"));
                     }
 
+                    var net = await _protocol.GetNetInfoAsync();
+                    if (net != null) ApplyNetInfo(net, fillStatic: true);
+
                     _hwStaticLoaded = true;
                 }
 
@@ -618,9 +621,103 @@ namespace PS5Upload
                     HwCpuAvgText.Text = $"{cpu.Average}%";
                 }
 
+                // Live traffic rates — refresh counters every tick
+                var net = await _protocol.GetNetInfoAsync();
+                if (net != null) ApplyNetInfo(net, fillStatic: false);
+
                 HwStatusText.Text = $"Last updated: {DateTime.Now:HH:mm:ss}";
             }
             catch (Exception ex) { HwStatusText.Text = $"Error: {ex.Message}"; }
+        }
+
+        // ---------------- network info ----------------
+        private ulong _netPrevRx, _netPrevTx;
+        private DateTime _netPrevT = DateTime.MinValue;
+
+        private void ApplyNetInfo(string txt, bool fillStatic)
+        {
+            var kv = new Dictionary<string, string>(StringComparer.Ordinal);
+            ulong rx = 0, tx = 0;
+            string? activeIf = null; ulong activeBytes = 0;
+            foreach (var raw in txt.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith("if="))
+                {
+                    var f = line.Split('|');
+                    if (f.Length == 3 && ulong.TryParse(f[1].AsSpan(3), out ulong r) && ulong.TryParse(f[2].AsSpan(3), out ulong t))
+                    {
+                        rx += r; tx += t;
+                        if (r + t > activeBytes) { activeBytes = r + t; activeIf = f[0].Substring(3); }
+                    }
+                    continue;
+                }
+                int eq = line.IndexOf('=');
+                if (eq > 0) kv[line[..eq]] = line[(eq + 1)..];
+            }
+
+            if (fillStatic)
+            {
+                if (kv.TryGetValue("state", out var st))
+                    NetStateText.Text = st switch { "3" => "🟢 Online", "2" => "🟡 IP obtained", "1" => "🟡 Connecting…", "0" => "🔴 Offline", _ => st };
+                if (kv.TryGetValue("ssid", out var ssid)) NetSsidText.Text = ssid;
+                if (kv.TryGetValue("rssi", out var rssi)) NetRssiText.Text = $"{rssi}%";
+                if (kv.TryGetValue("ip", out var ip)) NetIpText.Text = ip;
+                // Classify the raw fN= IPv4 fields: netmask starts with 255,
+                // gateway is the first remaining non-IP address, DNS are rest.
+                var fvals = kv.Where(p => p.Key.StartsWith("f") && System.Net.IPAddress.TryParse(p.Value, out _))
+                              .Select(p => p.Value).Where(v => v != "0.0.0.0").ToList();
+                var netmask = fvals.FirstOrDefault(v => v.StartsWith("255."));
+                var rest = fvals.Where(v => v != netmask && v != ip).ToList();
+                if (rest.Count > 0) NetGwText.Text = rest[0];
+                if (rest.Count > 1) NetDnsText.Text = string.Join("  ", rest.Skip(1));
+                if (kv.TryGetValue("mac", out var mac)) NetMacText.Text = mac;
+                var mtu = kv.TryGetValue("mtu", out var m) ? m : "—";
+                var link = kv.TryGetValue("link", out var l) ? (l == "0" ? "down" : "up") : "?";
+                var dev = kv.TryGetValue("device", out var d) ? (d == "1" ? "WiFi" : "Ethernet") : "";
+                NetMtuText.Text = $"{mtu} / {link}{(dev.Length > 0 ? $" / {dev}" : "")}";
+                if (kv.TryGetValue("nat_type", out var nt))
+                    NetNatText.Text = nt switch { "1" => "Type 1 (Open)", "2" => "Type 2 (Moderate)", "3" => "Type 3 (Strict)", _ => $"Type {nt}" };
+                if (kv.TryGetValue("nat_ip", out var nip))
+                    NetNatIpText.Text = kv.TryGetValue("nat_port", out var np) ? $"{nip}:{np}" : nip;
+            }
+
+            // rates from counter deltas
+            var now = DateTime.UtcNow;
+            if (_netPrevT != DateTime.MinValue)
+            {
+                double dt = (now - _netPrevT).TotalSeconds;
+                if (dt > 0.3)
+                {
+                    NetRxRateText.Text = $"{FormatRate((ulong)Math.Max(0, (double)(rx - _netPrevRx)) / dt)}";
+                    NetTxRateText.Text = $"{FormatRate((ulong)Math.Max(0, (double)(tx - _netPrevTx)) / dt)}";
+                    if (activeIf != null) NetIfText.Text = activeIf;
+                    NetTotalsText.Text = $"↓{FormatBytes(rx)}  ↑{FormatBytes(tx)}";
+                }
+            }
+            _netPrevRx = rx; _netPrevTx = tx; _netPrevT = now;
+        }
+
+        private static string FormatRate(double bps)
+        {
+            if (bps >= 1024.0 * 1024 * 1024) return $"{bps / (1024.0 * 1024 * 1024):0.00} GB/s";
+            if (bps >= 1024.0 * 1024) return $"{bps / (1024.0 * 1024):0.0} MB/s";
+            if (bps >= 1024.0) return $"{bps / 1024.0:0.0} KB/s";
+            return $"{bps:0} B/s";
+        }
+
+        private async void NetSpeedTestButton_Click(object? sender, RoutedEventArgs e)
+        {
+            if (_protocol == null) return;
+            NetSpeedTestButton.IsEnabled = false;
+            NetSpeedText.Text = "Running…";
+            try
+            {
+                var mbps = await _protocol.NetSpeedTestAsync();
+                NetSpeedText.Text = mbps.HasValue ? $"Link: {mbps.Value:0} Mbps ↓" : $"Failed: {_protocol.LastError}";
+            }
+            catch (Exception ex) { NetSpeedText.Text = $"Error: {ex.Message}"; }
+            finally { NetSpeedTestButton.IsEnabled = true; }
         }
 
         private async void LoadModulesButton_Click(object? sender, RoutedEventArgs e)

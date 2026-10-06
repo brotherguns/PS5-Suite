@@ -1,8 +1,8 @@
-# 🎮 PS5 Suite v7.1.5 — Complete PS5 Management Platform
+# 🎮 PS5 Suite v7.2.3 — Complete PS5 Management Platform
 
 **By Manos**
 
-All-in-one management suite for jailbroken PS5 consoles. One app — on Windows, Linux or macOS (Android build in progress) — that does everything: high-speed file transfers, game mount/launch, decrypted save backup/restore, screenshots, live hardware monitoring, PKG streaming installs, full FPKG building on the PC, memory tools, fan control, kernel log and a remote shell.
+All-in-one management suite for jailbroken PS5 consoles. One app — on **Windows, Linux, macOS and Android** — that does everything: high-speed file transfers, game mount/launch, decrypted save backup/restore, screenshots, live hardware monitoring, PKG streaming installs, full FPKG building on the PC, an integrated Homebrew Store, memory tools, fan control, kernel log, a remote shell — plus console LED control and DualSense lightbar support.
 
 ![PS5 Suite — File Transfer](screenshots/file_transfer.png)
 
@@ -28,6 +28,7 @@ All-in-one management suite for jailbroken PS5 consoles. One app — on Windows,
 | `PS5Suite-Linux-ARM64` | ARM64 Linux (Raspberry Pi, etc.) |
 | `PS5Suite-macOS-x64` | Intel Macs — `chmod +x`, Gatekeeper: right-click → Open |
 | `PS5Suite-macOS-ARM64` | Apple Silicon (M1/M2/M3/M4) |
+| `PS5Suite.apk` | **Android** — signed APK, full feature parity with desktop |
 | `ps5_suite_server.elf` | **Required** on-console server component |
 
 ---
@@ -63,8 +64,8 @@ Two side-by-side panes: your PC on the left, the PS5 on the right.
 **Local PC pane**
 - Browse all local drives/folders like a file manager.
 - **📄 Files** — multi-select files to queue. **📁 Folder** — queue an entire folder (recursive).
-- **🌐 NAS** — add a network/SMB path (`\\server\share\folder`) directly — uploads straight from your NAS to the PS5.
-- Right-click a local `.pkg` → **📦 Install on PS5** — *streams the package from the PC to the console's installer over HTTP; no 20 GB copy to the PS5 drive needed.*
+- **🌐 NAS** — add a network/SMB path (`\\server\share\folder`) with **username/password login** — managed SMB client (SMBLibrary) so it works on every OS, not just Windows; credentials are kept in memory only. Guest/anonymous shares work too. Uploads stream straight from your NAS to the PS5.
+- Right-click a local or NAS `.pkg` → **📦 Install on PS5** — *streams the package to the console's installer over HTTP; no 20 GB copy to the PS5 drive needed.*
 - **🗑️ Clear** empties the upload queue.
 
 **PS5 remote pane**
@@ -92,7 +93,14 @@ Two side-by-side panes: your PC on the left, the PS5 on the right.
 
 ---
 
-### 💾 SAVES & MEDIA → Saves
+### � GAMES → Homebrew Store
+
+- Built-in **pkg-zone.com** catalog: browse/search every public PS5 homebrew package.
+- Covers, version + author info, one-tap **📥 Install** — the package streams straight to the console installer.
+
+---
+
+### �💾 SAVES & MEDIA → Saves
 
 - Enumerates all save data on the console (per user, per title) with size/type badges.
 - **🔓 Mount (decrypt)** — mounts the save decrypted on the PS5 so its files are readable.
@@ -122,8 +130,30 @@ Everything is read **live from the console** — nothing hardcoded; values the c
 - **Live Sensors** (● LIVE, auto-refresh) — 🔥 CPU temp, 🌡️ SoC temp, ⚡ CPU frequency, 🔋 SoC power draw (watts).
 - **CPU Usage** — per-core usage bars (all 8 cores) + total.
 - **RAM** — used/free memory.
+- **Network** — interface info + ⚡ **LAN speed test** (payload streams 16 MB, shows real Mbps).
 - **Storage** — free/total per mount point.
 - **Modules** — **🔄 Load** lists all loaded kernel/user modules.
+
+---
+
+### 🎯 APPS (App Manager v2)
+
+- Lists every running app/process with real data from `sceKernelGetAppInfo`: pid, app_id, title_id, name, type, per-process **CPU%** (kernel `ki_runtime` deltas) and suspended state (`ki_stat`, no IPC stall).
+- **⏸ Suspend / ▶ Resume** — SIGSTOP/SIGCONT freeze, works on any app.
+- **🗑️ Kill** — ForceKillApp → KillApp → SIGKILL fallback chain.
+- **🧠 Coredump** — triggers a process memory dump (needs etaHEN).
+
+---
+
+### ⚡ POWER & DEVICES
+
+- **Power** — reboot / shutdown / rest mode from the app.
+- **USB drives** — list mounted USB storage.
+- **🎮 Controller (DualSense)** — live pad state + controller info read through a remote bridge into `SceShellUI` (the payload gets no pad session of its own, so it resolves the real logged-in user remotely — nothing hardcoded). **Lightbar**: set any RGB color.
+- **💡 Console LED** — real `/dev/icc_indicator` interface with three hardware channels (blue `0x01` / white `0x11` / amber `0x21` — verified on hardware): pick a color, run effects (breathe, sunrise, blink, chase…), `auto` hands control back to the system.
+- **🔔 Notify** — push a custom notification to the PS5 screen.
+- **📀 Disc Dump** — dump the inserted BD disc to `/user/disc` with live progress + cancel.
+- **🔊 Beeper** — console beep / mute.
 
 ---
 
@@ -206,8 +236,22 @@ Everything is read **live from the console** — nothing hardcoded; values the c
 | Payload proxy port | 13801+ |
 
 - All heavy work (transfers, FPKG builds) runs on background threads — the UI never freezes.
-- The Android app shares **the same UI + protocol code as the desktop EXE** (source included in the repo — APK build in progress).
-- 
+- **The Android app is the same Avalonia codebase** — shared protocol layer, same dark theme and the same feature set as the desktop build, wrapped in a hamburger-navigation layout for touch. Source is in `client-android/`; a signed `PS5Suite.apk` ships in every release.
+
+---
+
+## 📱 Android app
+
+- Same Avalonia UI/protocol as desktop — every feature above works on Android: transfers, games, store, saves, system info, tools, devices, debug log.
+- Side **☰ hamburger menu** navigation, signed APK, version synced with desktop releases.
+- Install → enter PS5 IP → Connect. Same payload, same ports.
+
+---
+
+## 🐞 Found a bug?
+
+Please report it in the **[Issues](https://github.com/manos555555/PS5-Suite/issues)** section — include your firmware, what you were doing, and any error message or log output (the app's Debug Log tab + the `ps5suite_*.log` file next to the executable help a lot). Every report gets looked at — the last two fixes came straight from user reports. 🙏
+
 ---
 
 ## ⚠️ Disclaimer

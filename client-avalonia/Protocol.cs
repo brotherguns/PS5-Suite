@@ -81,6 +81,22 @@ namespace PS5Upload
         MemSearch = 0x6C,
         KlogRead = 0x6D,
         MountGame = 0x6F,
+        // App Manager v2
+        AppListV2 = 0x70,
+        AppSuspend = 0x71,
+        AppResume = 0x72,
+        AppKill = 0x73,
+        AppCoredump = 0x74,
+        NetInfo = 0x75,
+        NetSpeedTest = 0x76,
+        PowerAction = 0x77,
+        UsbList = 0x78,
+        PadInfo = 0x79,
+        DiscDump = 0x7A,
+        Screenshot = 0x7B,
+        Notify = 0x7C,
+        PadAction = 0x7D,
+        IccControl = 0x7E,
 
         Shutdown = 0xFF
     }
@@ -139,19 +155,82 @@ namespace PS5Upload
             for (int p = 9113; p <= 9118; p++)
                 if (!ports.Contains(p)) ports.Add(p);
 
-            foreach (var p in ports)
+            // Probe ALL ports in parallel — a wedged payload accepts TCP but
+            // never answers PING, and probing serially wastes ~3s per dead port.
+            var probes = ports.Select(p => ProbePortAsync(ipAddress, p, ct)).ToList();
+            (int port, TcpClient? client)[] results;
+            try { results = await Task.WhenAll(probes); }
+            catch (OperationCanceledException)
             {
-                ct.ThrowIfCancellationRequested();
-                var r = await ConnectSingleAsync(ipAddress, p, ct);
-                if (r == ConnectResult.Timeout) { Disconnect(); return false; }
-                if (r == ConnectResult.Ok && await VerifyAliveAsync())
-                {
-                    Port = p;
-                    return true;
-                }
-                Disconnect();
+                foreach (var pr in probes)
+                    try { var r = pr.Result; r.client?.Dispose(); } catch { }
+                throw;
             }
-            return false;
+
+            TcpClient? winner = null; int winnerPort = 0;
+            foreach (var (p, client) in results)
+            {
+                if (client != null && winner == null) { winner = client; winnerPort = p; }
+                else if (client != null) { client.Close(); client.Dispose(); }
+            }
+            if (winner == null) { Disconnect(); return false; }
+
+            _client = winner;
+            TrySetSocketBuffers(_client, 16 * 1024 * 1024);
+            _stream = winner.GetStream();
+            Port = winnerPort;
+            return true;
+        }
+
+        /// <summary>TCP-connect + one bounded PING on a single port. Returns the
+        /// live socket on success so the caller can keep using it.</summary>
+        private static async Task<(int port, TcpClient? client)> ProbePortAsync(
+            string ipAddress, int port, CancellationToken ct)
+        {
+            TcpClient? c = null;
+            try
+            {
+                c = new TcpClient { NoDelay = true, LingerState = new System.Net.Sockets.LingerOption(false, 0) };
+                var connectTask = c.ConnectAsync(ipAddress, port);
+                if (await Task.WhenAny(connectTask, Task.Delay(2000, ct)) != connectTask)
+                { c.Dispose(); return (port, null); }
+                await connectTask;
+                if (!c.Connected) { c.Dispose(); return (port, null); }
+
+                var s = c.GetStream();
+                byte[] ping = { (byte)Command.Ping, 0, 0, 0, 0 };
+                using var probe = new CancellationTokenSource(2000);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(probe.Token, ct);
+                await s.WriteAsync(ping, linked.Token);
+                // Read the FULL framed response (5-byte header + payload) —
+                // PING answers "PONG" (4 bytes); leaving them in the stream
+                // desyncs every subsequent command.
+                var hdr = new byte[5];
+                int got = 0;
+                while (got < 5)
+                {
+                    int n = await s.ReadAsync(hdr, got, 5 - got, linked.Token);
+                    if (n == 0) break;
+                    got += n;
+                }
+                uint payloadLen = got == 5 ? BitConverter.ToUInt32(hdr, 1) : 0;
+                var body = new byte[payloadLen];
+                got = 0;
+                while (got < payloadLen)
+                {
+                    int n = await s.ReadAsync(body, got, (int)payloadLen - got, linked.Token);
+                    if (n == 0) break;
+                    got += n;
+                }
+                if (hdr[0] == (byte)Response.Ok && got == payloadLen) return (port, c);
+                c.Close(); c.Dispose();
+                return (port, null);
+            }
+            catch
+            {
+                c?.Dispose();
+                return (port, null);
+            }
         }
 
         /// <summary>
@@ -243,8 +322,7 @@ namespace PS5Upload
             try
             {
                 _client = new TcpClient();
-                _client.ReceiveBufferSize = 16 * 1024 * 1024; // 16MB - matches payload SO_RCVBUF setting
-                _client.SendBufferSize = 16 * 1024 * 1024; // 16MB - matches payload SO_RCVBUF setting
+                TrySetSocketBuffers(_client, 16 * 1024 * 1024); // 16MB - matches payload SO_RCVBUF setting
                 _client.NoDelay = true;
                 _client.LingerState = new System.Net.Sockets.LingerOption(false, 0);
 
@@ -318,7 +396,34 @@ namespace PS5Upload
             await _stream.WriteAsync(header, 0, 5);
             if (data != null && data.Length > 0)
             {
-                await _stream.WriteAsync(data, 0, data.Length);
+                await WriteSocketChunkedAsync(_stream, data, 0, data.Length, CancellationToken.None);
+            }
+        }
+
+        // macOS caps SO_SNDBUF/SO_RCVBUF at kern.ipc.maxsockbuf (8MB default).
+        // setsockopt above the cap returns ENOBUFS — clamp down until it sticks.
+        private static void TrySetSocketBuffers(TcpClient client, int desired)
+        {
+            for (int sz = desired; sz >= 1 * 1024 * 1024; sz >>= 1)
+            {
+                try { client.ReceiveBufferSize = sz; client.SendBufferSize = sz; return; }
+                catch (SocketException) { }
+            }
+        }
+
+        // macOS kern.ipc.maxsockbuf defaults to 8MB — a single send() larger
+        // than that fails with ENOBUFS. Slice every socket write to 4MB;
+        // invisible overhead on Windows/Linux, fixes Darwin transfers.
+        private const int MaxSocketWriteBytes = 4 * 1024 * 1024;
+
+        private static async Task WriteSocketChunkedAsync(NetworkStream stream, byte[] buffer, int offset, int count, CancellationToken ct)
+        {
+            while (count > 0)
+            {
+                int n = Math.Min(count, MaxSocketWriteBytes);
+                await stream.WriteAsync(buffer, offset, n, ct);
+                offset += n;
+                count -= n;
             }
         }
 
@@ -420,7 +525,8 @@ namespace PS5Upload
                     return null;
                 }
                 
-                // Get path if available (part 8)
+                // Get path if available (part 8); part 9 was a dev-only mount
+                // dump — intentionally ignored now.
                 string storagePath = (parts.Length >= 8) ? parts[7].Trim() : "unknown";
 
                 return new PS5StorageInfo
@@ -1046,6 +1152,138 @@ namespace PS5Upload
                 _commandLock.Release();
             }
         }
+
+        // Power action: "reboot" or "shutdown" — the console goes down right
+        // after the ACK, so callers should expect the connection to drop.
+        public async Task<(bool success, string message)> PowerActionAsync(string action)
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.PowerAction, Encoding.UTF8.GetBytes(action));
+                var (response, data) = await ReceiveResponseAsync(10000);
+                string msg = data.Length > 0 ? Encoding.UTF8.GetString(data) : response.ToString();
+                return (response == Response.Ok, msg.TrimEnd('\0', '\n', '\r'));
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        public async Task<List<PS5UsbDrive>> ListUsbDrivesAsync()
+        {
+            var drives = new List<PS5UsbDrive>();
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.UsbList);
+                var (response, data) = await ReceiveResponseAsync();
+                if (response != Response.Data) return drives;
+
+                foreach (var line in Encoding.UTF8.GetString(data).Split('\n'))
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line == "NONE") continue;
+                    var p = line.Trim().Split('|');
+                    if (p.Length < 5) continue;
+                    drives.Add(new PS5UsbDrive
+                    {
+                        MountPath = p[0],
+                        FsType = p[1],
+                        Device = p[2],
+                        TotalBytes = ulong.TryParse(p[3], out var t) ? t : 0,
+                        FreeBytes = ulong.TryParse(p[4], out var f) ? f : 0
+                    });
+                }
+                return drives;
+            }
+            catch
+            {
+                return drives;
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        public async Task<string?> GetPadInfoAsync()
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.PadInfo);
+                var (response, data) = await ReceiveResponseAsync(15000);
+                if (response != Response.Data) return null;
+                return Encoding.UTF8.GetString(data);
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        // Generic simple command that takes a string arg and returns a short
+        // status string — used by the devices/fun features.
+        public async Task<(bool success, string message)> SendTextCommandAsync(Command cmd, string arg, int timeoutMs = 15000)
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(cmd, Encoding.UTF8.GetBytes(arg));
+                var (response, data) = await ReceiveResponseAsync(timeoutMs);
+                string msg = data.Length > 0 ? Encoding.UTF8.GetString(data).TrimEnd('\0', '\n', '\r') : response.ToString();
+                return (response == Response.Ok, msg);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        public Task<(bool success, string message)> DiscDumpAsync(string action)
+            => SendTextCommandAsync(Command.DiscDump, action);
+
+        public async Task<(bool success, string message)> CaptureScreenshotAsync()
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.Screenshot);
+                var (response, data) = await ReceiveResponseAsync(20000);
+                string msg = data.Length > 0 ? Encoding.UTF8.GetString(data).TrimEnd('\0', '\n', '\r') : response.ToString();
+                return (response == Response.Ok, msg);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+            finally
+            {
+                _commandLock.Release();
+            }
+        }
+
+        public Task<(bool success, string message)> NotifyAsync(string text)
+            => SendTextCommandAsync(Command.Notify, text);
+
+        public Task<(bool success, string message)> PadActionAsync(string cmd)
+            => SendTextCommandAsync(Command.PadAction, cmd);
+
+        public Task<(bool success, string message)> IccControlAsync(string cmd)
+            => SendTextCommandAsync(Command.IccControl, cmd);
 
         // NEW: Get list of mounted games
         public async Task<List<PS5MountedGame>> GetGameListAsync()
@@ -1729,17 +1967,17 @@ namespace PS5Upload
 
         private async Task<bool> UploadFileCoreAsync(string localPath, string remotePath, IProgress<UploadProgress>? progress, CancellationToken cancellationToken, long chunkOffset, long chunkSize, Action? onReadyCallback)
         {
-            FileInfo fileInfo = new FileInfo(localPath);
-            if (!fileInfo.Exists) return false;
+            if (!LocalIo.FileExists(localPath)) return false;
+            long fileLen = LocalIo.GetLength(localPath);
 
             // Determine actual upload size
-            long uploadSize = chunkSize > 0 ? chunkSize : fileInfo.Length;
+            long uploadSize = chunkSize > 0 ? chunkSize : fileLen;
 
             // Send START_UPLOAD with optional chunk offset
             byte[] pathBytes = Encoding.UTF8.GetBytes(remotePath);
             byte[] startData = new byte[pathBytes.Length + 1 + 8 + 8]; // path + null + size + offset
             Array.Copy(pathBytes, 0, startData, 0, pathBytes.Length);
-            BitConverter.GetBytes(fileInfo.Length).CopyTo(startData, pathBytes.Length + 1);
+            BitConverter.GetBytes(fileLen).CopyTo(startData, pathBytes.Length + 1);
             BitConverter.GetBytes(chunkOffset).CopyTo(startData, pathBytes.Length + 9);
 
             await SendCommandAsync(Command.StartUpload, startData);
@@ -1771,9 +2009,10 @@ namespace PS5Upload
             
             try
             {
-                // Use RandomAccess for chunked uploads to avoid disk I/O contention when multiple workers read same file
-                FileOptions fileOptions = chunkOffset > 0 ? FileOptions.RandomAccess : FileOptions.SequentialScan;
-                using (FileStream fs = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, fileOptions))
+                // RandomAccess for chunked uploads to avoid disk I/O contention
+                // when multiple workers read the same file. UNC paths go
+                // through the NAS session via a seekable SMB stream.
+                using (Stream fs = LocalIo.OpenRead(localPath, randomAccess: chunkOffset > 0))
                 {
                     if (chunkOffset > 0)
                     {
@@ -1809,7 +2048,7 @@ namespace PS5Upload
                         
                         try
                         {
-                            await _stream.WriteAsync(writeBuffer, 0, 5 + bytesRead, linkedCts.Token);
+                            await WriteSocketChunkedAsync(_stream, writeBuffer, 0, 5 + bytesRead, linkedCts.Token);
                         }
                         catch (OperationCanceledException) when (writeTimeout.IsCancellationRequested)
                         {
@@ -1837,12 +2076,12 @@ namespace PS5Upload
                             progress?.Report(new UploadProgress
                             {
                                 BytesSent = chunkOffset + totalSent,
-                                TotalBytes = fileInfo.Length,
+                                TotalBytes = fileLen,
                                 SpeedBytesPerSecond = currentSpeed,
                                 AverageSpeedBytesPerSecond = avgSpeed,
                                 ElapsedTime = elapsed,
                                 EstimatedTimeRemaining = eta,
-                                CurrentFileName = fileInfo.Name
+                                CurrentFileName = LocalIo.GetName(localPath)
                             });
                         }
                         
@@ -2433,6 +2672,83 @@ namespace PS5Upload
                 return Encoding.UTF8.GetString(data);
             }
             catch (Exception ex) { LastError = $"MemSearchAsync: {ex.Message}"; return null; }
+            finally { _commandLock.Release(); }
+        }
+
+        // ================= App Manager v2 =================
+
+        /// <summary>pid|appid|title|comm|apptype|cpu_x100|suspended per line (+ appinfo=ok line)</summary>
+        public async Task<string?> AppListV2Async()
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.AppListV2);
+                var (response, data) = await ReceiveResponseAsync(30000);
+                if (response != Response.Data) { LastError = Encoding.UTF8.GetString(data); return null; }
+                return Encoding.UTF8.GetString(data);
+            }
+            catch (Exception ex) { LastError = $"AppListV2Async: {ex.Message}"; return null; }
+            finally { _commandLock.Release(); }
+        }
+
+        private async Task<(bool ok, string msg)> AppActionAsync(Command cmd, int appId, int pid = 0)
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(cmd, Encoding.UTF8.GetBytes($"{appId}|{pid}"));
+                var (response, data) = await ReceiveResponseAsync(30000);
+                return (response == Response.Ok, Encoding.UTF8.GetString(data));
+            }
+            catch (Exception ex) { LastError = $"AppAction: {ex.Message}"; return (false, LastError); }
+            finally { _commandLock.Release(); }
+        }
+
+        public Task<(bool ok, string msg)> AppSuspendAsync(int appId, int pid)  => AppActionAsync(Command.AppSuspend, appId, pid);
+        public Task<(bool ok, string msg)> AppResumeAsync(int appId, int pid)   => AppActionAsync(Command.AppResume, appId, pid);
+        public Task<(bool ok, string msg)> AppKillAsync(int appId, int pid)     => AppActionAsync(Command.AppKill, appId, pid);
+        public Task<(bool ok, string msg)> AppCoredumpAsync(int appId)          => AppActionAsync(Command.AppCoredump, appId);
+
+        /// <summary>
+        /// Network info: key=value lines plus per-interface byte counters
+        /// ("if=name|rx=N|tx=N"). Returns the raw text for the caller to parse.
+        /// </summary>
+        public async Task<string?> GetNetInfoAsync()
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                await SendCommandAsync(Command.NetInfo);
+                var (response, data) = await ReceiveResponseAsync();
+                if (response != Response.Data) { LastError = Encoding.UTF8.GetString(data); return null; }
+                return Encoding.UTF8.GetString(data);
+            }
+            catch (Exception ex) { LastError = $"GetNetInfoAsync: {ex.Message}"; return null; }
+            finally { _commandLock.Release(); }
+        }
+
+        /// <summary>
+        /// LAN link speed test: payload streams 16MB; returns receive throughput in Mbps.
+        /// </summary>
+        public async Task<double?> NetSpeedTestAsync()
+        {
+            await _commandLock.WaitAsync();
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                await SendCommandAsync(Command.NetSpeedTest);
+                var (response, data) = await ReceiveResponseAsync();
+                sw.Stop();
+                if (response != Response.Data || data.Length == 0)
+                {
+                    LastError = data.Length > 0 ? Encoding.UTF8.GetString(data) : "no data";
+                    return null;
+                }
+                double mbps = data.Length * 8.0 / sw.Elapsed.TotalSeconds / 1_000_000.0;
+                return mbps;
+            }
+            catch (Exception ex) { LastError = $"NetSpeedTestAsync: {ex.Message}"; return null; }
             finally { _commandLock.Release(); }
         }
 
@@ -3157,6 +3473,25 @@ namespace PS5Upload
         public uint Id { get; set; }
         public string Name { get; set; } = "";
         public string Path { get; set; } = "";
+    }
+
+    public class PS5UsbDrive
+    {
+        public string MountPath { get; set; } = "";
+        public string FsType { get; set; } = "";
+        public string Device { get; set; } = "";
+        public ulong TotalBytes { get; set; }
+        public ulong FreeBytes { get; set; }
+        public string TotalGB => FormatBytes(TotalBytes);
+        public string FreeGB => FormatBytes(FreeBytes);
+
+        private static string FormatBytes(ulong bytes)
+        {
+            double b = bytes;
+            if (b >= 1000.0 * 1000 * 1000) return $"{b / (1000.0 * 1000 * 1000):F1} GB";
+            if (b >= 1000.0 * 1000) return $"{b / (1000.0 * 1000):F1} MB";
+            return $"{b:F0} B";
+        }
     }
 
     // Save game info

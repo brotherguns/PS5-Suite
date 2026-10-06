@@ -232,7 +232,7 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1">
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
-                                    <TextBlock Text="Mounted Games:" Width="110" Foreground="#999999"/>
+                                    <TextBlock Text="Games &amp; Apps:" Width="110" Foreground="#999999"/>
                                     <TextBlock x:Name="MountedGamesText" Text="---" FontWeight="Bold" Foreground="#007ACC"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal">
@@ -281,12 +281,13 @@
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
                                 <Border Grid.Row="0" Background="#2D2D30" Padding="10" CornerRadius="4,4,0,0">
-                                    <TextBlock Text="📁 Local Files" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="LocalFilesHeader" Text="📁 Local Files" FontSize="14" FontWeight="SemiBold"/>
                                 </Border>
-                                <ListBox Grid.Row="1" x:Name="LocalFilesListBox" BorderThickness="0" DragDrop.AllowDrop="True">
+                                <ListBox Grid.Row="1" x:Name="LocalFilesListBox" BorderThickness="0" DragDrop.AllowDrop="True" DoubleTapped="LocalFilesListBox_DoubleTapped">
                                     <ListBox.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem Header="📦 Install on PS5 (.pkg)" Click="InstallLocalPkgMenuItem_Click"/>
+                                            <MenuItem Header="🔌 Disconnect NAS session" Click="DisconnectNasMenuItem_Click"/>
                                             <Separator/>
                                             <MenuItem Header="🗑️ Remove from list" Click="RemoveLocalFileMenuItem_Click"/>
                                         </ContextMenu>
@@ -301,6 +302,7 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                                 <WrapPanel Grid.Row="2" Margin="10" HorizontalAlignment="Center">
+                                    <Button x:Name="LocalBrowseBackBtn" Content="⬆ Back" Click="LocalBrowseBack_Click" Padding="10,5" Margin="0,0,5,0" Background="#6C757D" IsVisible="False" ToolTip.Tip="Leave browse mode / go up one level"/>
                                     <Button Content="📄 Files" Click="BrowseFilesButton_Click" Padding="10,5" Margin="0,0,5,0"/>
                                     <Button Content="📁 Folder" Click="BrowseFolderButton_Click" Padding="10,5" Margin="0,0,5,0"/>
                                     <Button Content="🌐 NAS" Click="AddNasPath_Click" Padding="10,5" Background="#17A2B8" Margin="0,0,5,0" ToolTip.Tip="Add network/NAS path (\\server\share)"/>
@@ -373,10 +375,13 @@
 
                 <!-- PAGE 2: Games -->
                 <Grid x:Name="PageGames" IsVisible="False">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
+                    <TabControl Background="#1E1E1E">
+                        <TabItem Header="🎮 Games">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
 
                     <Border Grid.Row="0" Background="#252526" CornerRadius="4" Padding="12" Margin="0,0,0,15">
                         <WrapPanel>
@@ -433,6 +438,56 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Homebrew Store (PKG-Zone catalog) -->
+                        <TabItem Header="🛒 Homebrew Store">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Background="#252526" CornerRadius="4" Padding="12" Margin="0,0,0,15">
+                                    <WrapPanel>
+                                        <TextBlock Text="🛒 PKG-Zone" FontSize="16" FontWeight="Bold" Foreground="#007ACC" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                                        <Button Content="🔄 Refresh Catalog" Click="StoreRefresh_Click" Padding="10,5" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="StoreSearchBox" PlaceholderText="Filter..." Width="200" Margin="0,0,8,0" TextChanged="StoreSearch_TextChanged"/>
+                                        <TextBlock x:Name="StoreStatusText" Text="" Foreground="#999999" VerticalAlignment="Center"/>
+                                    </WrapPanel>
+                                </Border>
+                                <ListBox Grid.Row="1" x:Name="StoreListBox" Background="#1E1E1E" BorderThickness="0">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#2D2D30" CornerRadius="6" Padding="12" Margin="3">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="64" Height="64" Margin="0,0,15,0" Background="#3E3E42" CornerRadius="8" ClipToBounds="True">
+                                                        <Image Source="{Binding Cover}" Stretch="UniformToFill"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                            <TextBlock Text="{Binding Id}" FontSize="12" Foreground="#007ACC" FontWeight="SemiBold"/>
+                                                            <TextBlock Text=" • " Foreground="#666666"/>
+                                                            <TextBlock Text="{Binding Version}" FontSize="12" Foreground="#FFC107"/>
+                                                            <TextBlock Text=" • " Foreground="#666666"/>
+                                                            <TextBlock Text="{Binding Author}" FontSize="12" Foreground="#9CDCFE"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                    <Button Grid.Column="2" Content="📥 Install" Click="StoreInstall_Click" Tag="{Binding Id}" Padding="12,6" Background="#28A745" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
 
                 <!-- PAGE 3: Saves & Media -->
@@ -812,6 +867,78 @@
                             </Border>
                         </Grid>
 
+                        <!-- Row 3b: Network -->
+                        <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="20"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="🌐 Network" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Status:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="NetStateText" Text="—" Margin="0,3" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SSID:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="NetSsidText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Signal (RSSI):" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="NetRssiText" Text="—" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="IP Address:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="NetIpText" Text="—" Margin="0,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Gateway:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="NetGwText" Text="—" Margin="0,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="DNS:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="NetDnsText" Text="—" Margin="0,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="MAC:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="1" x:Name="NetMacText" Text="—" Margin="0,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="0" Text="MTU / Link:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="1" x:Name="NetMtuText" Text="—" Margin="0,3"/>
+                                    </Grid>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="📊 Live Traffic" FontWeight="Bold" FontSize="14" Foreground="#0E9CFF" Margin="0,0,0,12"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="NAT Type:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="NetNatText" Text="—" Margin="0,3" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Public IP:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="NetNatIpText" Text="—" Margin="0,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="⬇ Download:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="NetRxRateText" Text="—" Margin="0,3" Foreground="#28A745" FontWeight="Bold" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="⬆ Upload:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="NetTxRateText" Text="—" Margin="0,3" Foreground="#0E9CFF" FontWeight="Bold" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Interface:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="NetIfText" Text="—" Margin="0,3" FontFamily="Consolas" FontSize="11"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Totals:" Foreground="#808080" Margin="0,3"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="NetTotalsText" Text="—" Margin="0,3" FontFamily="Consolas" FontSize="11"/>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                        <Button x:Name="NetSpeedTestButton" Content="⚡ Speed Test" Background="#0E9CFF" Foreground="White" Padding="14,7" CornerRadius="4" Click="NetSpeedTestButton_Click"/>
+                                        <TextBlock x:Name="NetSpeedText" Text="" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#FFAA00" FontWeight="Bold" FontFamily="Consolas"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
                         <!-- Row 4: Loaded Modules -->
                         <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
                             <StackPanel>
@@ -933,6 +1060,139 @@
                             </Grid>
                         </TabItem>
 
+                        <!-- Power & Devices Tab -->
+                        <TabItem Header="⚡ Power &amp; Devices">
+                            <ScrollViewer Background="#1E1E1E">
+                                <StackPanel Margin="15">
+                                    <TextBlock Text="⚡ Console Power" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel>
+                                                <Button Content="🔄 Reboot" Click="PowerReboot_Click" Padding="15,8" Background="#007ACC" FontWeight="SemiBold" Margin="0,0,10,0"/>
+                                                <Button Content="⏻ Shutdown" Click="PowerShutdown_Click" Padding="15,8" Background="#DC3545" FontWeight="SemiBold"/>
+                                            </WrapPanel>
+                                            <TextBlock Text="⚠️ The console acts immediately after confirmation — the connection drops." Foreground="#707070" FontSize="11" Margin="0,10,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="🔌 USB Drives" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel Margin="0,0,0,10">
+                                                <Button Content="🔄 Refresh" Click="RefreshUsbDrives_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,10,0"/>
+                                                <Button Content="📂 Browse Selected" Click="BrowseUsbDrive_Click" Padding="10,5" Background="#007ACC"/>
+                                            </WrapPanel>
+                                            <ListBox x:Name="UsbDrivesList" Height="110" FontFamily="Consolas" FontSize="12" Background="#1A1A1B"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="🎮 Controllers" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel Margin="0,0,0,10">
+                                                <Button Content="🔄 Refresh" Click="RefreshPadInfo_Click" Padding="10,5" Background="#3E3E42"/>
+                                            </WrapPanel>
+                                            <TextBlock x:Name="PadInfoText" Text="—" FontFamily="Consolas" FontSize="12" Foreground="#CCCCCC" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="🎨 Light Bar" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel>
+                                                <Button Content="🔵 Blue" Click="LightBar_Click" Tag="0,0,255" Padding="10,5" Background="#1E3A5F" Margin="0,0,6,0"/>
+                                                <Button Content="🔴 Red" Click="LightBar_Click" Tag="255,0,0" Padding="10,5" Background="#5F1E1E" Margin="0,0,6,0"/>
+                                                <Button Content="🟢 Green" Click="LightBar_Click" Tag="0,255,0" Padding="10,5" Background="#1E5F1E" Margin="0,0,6,0"/>
+                                                <Button Content="🟣 Purple" Click="LightBar_Click" Tag="160,32,240" Padding="10,5" Background="#3E1E5F" Margin="0,0,6,0"/>
+                                                <Button Content="⚪ White" Click="LightBar_Click" Tag="255,255,255" Padding="10,5" Background="#4E4E4E" Margin="0,0,6,0"/>
+                                                <Button Content="⚫ Off" Click="LightBar_Click" Tag="0,0,0" Padding="10,5" Background="#3E3E42"/>
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="📸 Screenshot &amp; 🔔 Notification" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel Margin="0,0,0,10">
+                                                <Button Content="📸 Capture Screen" Click="Screenshot_Click" Padding="12,6" Background="#007ACC" Margin="0,0,10,0"/>
+                                                <TextBlock Text="Saved to PS5 — grab it from Saves &amp; Media" Foreground="#707070" FontSize="11" VerticalAlignment="Center"/>
+                                            </WrapPanel>
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBox x:Name="NotifyTextBox" PlaceholderText="Notification text..." Padding="8,6" Margin="0,0,10,0"/>
+                                                <Button Grid.Column="1" Content="🔔 Send" Click="SendNotify_Click" Padding="12,6" Background="#28A745"/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="💡 Console LED &amp; 🔊 Beeper" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel Margin="0,0,0,8">
+                                                <TextBlock Text="LED:" Foreground="#CCCCCC" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <Button Content="Bright" Click="LedDim_Click" Tag="0" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Medium" Click="LedDim_Click" Tag="1" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Dim" Click="LedDim_Click" Tag="2" Padding="10,5" Background="#3E3E42"/>
+                                            </WrapPanel>
+                                            <WrapPanel Margin="0,0,0,8">
+                                                <TextBlock Text="Color:" Foreground="#CCCCCC" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <Button Content="White" Click="LedColor_Click" Tag="0,255,0" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Blue" Click="LedColor_Click" Tag="255,0,0" Padding="10,5" Background="#1E3A5F" Margin="0,0,6,0"/>
+                                                <Button Content="Orange" Click="LedColor_Click" Tag="0,0,255" Padding="10,5" Background="#5F3A1E" Margin="0,0,6,0"/>
+                                                <Button Content="Purple" Click="LedColor_Click" Tag="64,0,255" Padding="10,5" Background="#3E1E5F" Margin="0,0,6,0"/>
+                                                <Button Content="Pink" Click="LedColor_Click" Tag="32,48,255" Padding="10,5" Background="#5F1E3E" Margin="0,0,6,0"/>
+                                                <Button Content="Off" Click="LedColor_Click" Tag="0,0,0" Padding="10,5" Background="#3E3E42"/>
+                                            </WrapPanel>
+                                            <WrapPanel Margin="0,0,0,8">
+                                                <TextBlock Text="Effect:" Foreground="#CCCCCC" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <ComboBox x:Name="LedEffectCombo" Width="180" SelectedIndex="1" Margin="0,0,8,0">
+                                                    <ComboBoxItem Content="off"/>
+                                                    <ComboBoxItem Content="white"/>
+                                                    <ComboBoxItem Content="white-dim"/>
+                                                    <ComboBoxItem Content="blue"/>
+                                                    <ComboBoxItem Content="orange"/>
+                                                    <ComboBoxItem Content="purple"/>
+                                                    <ComboBoxItem Content="pink"/>
+                                                    <ComboBoxItem Content="sunrise (white breathe + orange)"/>
+                                                    <ComboBoxItem Content="blue-breathe"/>
+                                                    <ComboBoxItem Content="white-breathe"/>
+                                                    <ComboBoxItem Content="orange-breathe"/>
+                                                    <ComboBoxItem Content="pink-breathe"/>
+                                                    <ComboBoxItem Content="pink-breathe-fast"/>
+                                                    <ComboBoxItem Content="blue-to-richblue"/>
+                                                    <ComboBoxItem Content="blue-white-anim"/>
+                                                </ComboBox>
+                                                <Button Content="✨ Apply" Click="LedEffect_Click" Padding="10,5" Background="#007ACC"/>
+                                            </WrapPanel>
+                                            <WrapPanel>
+                                                <TextBlock Text="Beeper:" Foreground="#CCCCCC" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <Button Content="Beep" Click="Buzzer_Click" Tag="1" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Error" Click="Buzzer_Click" Tag="2" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Long" Click="Buzzer_Click" Tag="3" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Vol High" Click="BuzzerVol_Click" Tag="0" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Vol Med" Click="BuzzerVol_Click" Tag="1" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Vol Low" Click="BuzzerVol_Click" Tag="2" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Mute" Click="BuzzerMute_Click" Tag="1" Padding="10,5" Background="#3E3E42" Margin="0,0,6,0"/>
+                                                <Button Content="Unmute" Click="BuzzerMute_Click" Tag="0" Padding="10,5" Background="#3E3E42"/>
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="💿 Disc Dump" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,15"/>
+                                    <Border Background="#252526" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <WrapPanel Margin="0,0,0,10">
+                                                <Button Content="▶ Start Dump" Click="DiscDumpStart_Click" Padding="12,6" Background="#28A745" Margin="0,0,8,0"/>
+                                                <Button Content="🔄 Status" Click="DiscDumpStatus_Click" Padding="12,6" Background="#3E3E42" Margin="0,0,8,0"/>
+                                                <Button Content="⏹ Cancel" Click="DiscDumpCancel_Click" Padding="12,6" Background="#DC3545"/>
+                                            </WrapPanel>
+                                            <ProgressBar x:Name="DiscDumpProgress" Height="8" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"/>
+                                            <TextBlock x:Name="DiscDumpStatusText" Text="Insert a disc, then Start — copies /mnt/disc → /user/data/disc_dumps" Foreground="#999999" FontSize="11" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
                         <!-- Memory Editor Tab -->
                         <TabItem Header="🧠 Memory">
                             <Grid Background="#1E1E1E" Margin="15">
@@ -1014,6 +1274,36 @@
                             </Grid>
                         </TabItem>
 
+                        <!-- App Manager v2 Tab -->
+                        <TabItem Header="🎯 Apps">
+                            <Grid Background="#1E1E1E" Margin="15">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="🎯 App Manager" FontWeight="Bold" FontSize="16" Foreground="#0E9CFF" Margin="0,0,0,10"/>
+                                <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+                                    <Button Content="🔄 Refresh" Click="AppMgrRefresh_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="AppMgrAutoRefresh" Content="Auto (3s)" Foreground="#CCCCCC" Margin="0,0,10,0" VerticalAlignment="Center" IsCheckedChanged="AppMgrAutoRefresh_Changed"/>
+                                    <Button x:Name="AppMgrSuspendBtn" Content="⏸ Freeze" Click="AppMgrSuspend_Click" Padding="10,5" Background="#8A6D00" Margin="0,0,8,0" ToolTip.Tip="Freeze all app threads (SIGSTOP) — game pauses completely"/>
+                                    <Button x:Name="AppMgrResumeBtn" Content="▶ Resume" Click="AppMgrResume_Click" Padding="10,5" Background="#28A745" Margin="0,0,8,0" ToolTip.Tip="Resume a frozen app (SIGCONT)"/>
+                                    <Button x:Name="AppMgrKillBtn" Content="❌ Kill" Click="AppMgrKill_Click" Padding="10,5" Background="#B03030" Margin="0,0,8,0" ToolTip.Tip="Force-kill (LncUtil, SIGKILL fallback)"/>
+                                    <Button x:Name="AppMgrCoredumpBtn" Content="💥 Coredump" Click="AppMgrCoredump_Click" Padding="10,5" Background="#6F42C1" Margin="0,0,8,0" ToolTip.Tip="Ask ShellCore to dump the app's memory (for debugging)"/>
+                                    <TextBlock x:Name="AppMgrStatus" Foreground="#808080" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </WrapPanel>
+                                <ListBox Grid.Row="2" x:Name="AppMgrList" FontFamily="Consolas" FontSize="12" Background="#252526" SelectionChanged="AppMgrList_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Grid.Row="3" Text="Real app info via sceKernelGetAppInfo — suspend/resume/kill via LncUtil (needs etaHEN). CPU% from kernel scheduler stats." Foreground="#606060" FontSize="11" Margin="0,6,0,0"/>
+                            </Grid>
+                        </TabItem>
+
                         <!-- Kernel Log Tab -->
                         <TabItem Header="🧾 Kernel Log">
                             <Grid Background="#1E1E1E" Margin="15">
@@ -1027,6 +1317,7 @@
                                 <WrapPanel Grid.Row="1" Margin="0,0,0,10">
                                     <Button Content="🔄 Refresh" Click="KlogRefresh_Click" Padding="10,5" Background="#3E3E42" Margin="0,0,8,0"/>
                                     <CheckBox x:Name="KlogAutoRefresh" Content="Auto (3s)" Foreground="#CCCCCC" Margin="0,0,10,0" VerticalAlignment="Center" IsCheckedChanged="KlogAutoRefresh_Changed"/>
+                                    <CheckBox x:Name="KlogAutoScroll" Content="Auto-scroll" Foreground="#CCCCCC" IsChecked="True" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <ComboBox x:Name="KlogTailSelect" Width="120" SelectedIndex="0" Margin="0,0,8,0">
                                         <ComboBoxItem Content="Last 32 KB"/>
                                         <ComboBoxItem Content="Last 128 KB"/>
@@ -1169,6 +1460,7 @@
                     <TextBox Grid.Row="1" x:Name="LogTextBox" Text="" FontFamily="Consolas" FontSize="11" Foreground="#CCCCCC" Background="#1E1E1E" BorderThickness="0" Padding="10" TextWrapping="Wrap" IsReadOnly="True" AcceptsReturn="True"/>
 
                     <WrapPanel Grid.Row="2" Margin="10" HorizontalAlignment="Center">
+                        <CheckBox x:Name="LogAutoScroll" Content="Auto-scroll" Foreground="#CCCCCC" IsChecked="True" VerticalAlignment="Center" Margin="0,0,15,0"/>
                         <Button Content="📋 Copy Log" Click="CopyLogButton_Click" Padding="8,5" Margin="0,0,5,0" Background="#28A745"/>
                         <Button Content="🗑️ Clear Log" Click="ClearLogButton_Click" Padding="8,5" Background="#3E3E42"/>
                     </WrapPanel>

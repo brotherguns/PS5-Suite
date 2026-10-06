@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -357,6 +358,8 @@ namespace PS5Upload
                     }
                 }
             }
+            // Files were queued while browsing a folder — surface the queue.
+            if (_localBrowsePath != null) ExitLocalBrowse();
         }
 
         private async void BrowseFolderButton_Click(object? sender, RoutedEventArgs e)
@@ -373,9 +376,94 @@ namespace PS5Upload
                     _localFiles.Add(new LocalFileItem { Name = dirInfo.Name, FullPath = path, Icon = "📁", IsDirectory = true, Size = 0 });
                 }
             }
+            if (_localBrowsePath != null) ExitLocalBrowse();
         }
 
-        private void ClearLocalFiles_Click(object? sender, RoutedEventArgs e) => _localFiles.Clear();
+        // ============================================================
+        // LOCAL PANE BROWSE MODE — double-click a folder in the queue
+        // to navigate into it (local + NAS); files double-clicked in
+        // browse mode are added to the upload queue.
+        // ============================================================
+        private string? _localBrowsePath;   // null = queue view
+        private readonly ObservableCollection<LocalFileItem> _localBrowse = new();
+        private const string BrowseBackSentinel = "\0back";
+
+        private void LocalFilesListBox_DoubleTapped(object? sender, TappedEventArgs e)
+        {
+            if (LocalFilesListBox.SelectedItem is not LocalFileItem item) return;
+            if (_localBrowsePath == null)
+            {
+                if (item.IsDirectory) EnterLocalBrowse(item.FullPath);
+            }
+            else
+            {
+                if (item.FullPath == BrowseBackSentinel) { LocalBrowseUp(); return; }
+                if (item.IsDirectory) EnterLocalBrowse(item.FullPath);
+                else
+                {
+                    // Queue the file — keep the browse view so more can be picked.
+                    _localFiles.Add(new LocalFileItem { Name = item.Name, FullPath = item.FullPath, Icon = "📄", IsDirectory = false, Size = item.Size });
+                    Log($"➕ Queued from browse: {item.Name} ({FormatFileSize(item.Size)})");
+                }
+            }
+        }
+
+        private void EnterLocalBrowse(string path)
+        {
+            try
+            {
+                var entries = LocalIo.Enumerate(path);
+                _localBrowse.Clear();
+                _localBrowse.Add(new LocalFileItem { Name = "⬆ .. (Back)", FullPath = BrowseBackSentinel, Icon = "⬆", IsDirectory = false });
+                foreach (var en in entries.OrderByDescending(x => x.IsDirectory).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+                    _localBrowse.Add(new LocalFileItem { Name = en.Name, FullPath = en.FullPath, IsDirectory = en.IsDirectory, Size = en.Size, Icon = en.IsDirectory ? "📁" : "📄" });
+                _localBrowsePath = path;
+                LocalFilesListBox.ItemsSource = _localBrowse;
+                LocalFilesHeader.Text = "📂 " + path;
+                LocalBrowseBackBtn.IsVisible = true;
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ Cannot browse {path}: {ex.Message}");
+            }
+        }
+
+        private void LocalBrowseUp()
+        {
+            if (_localBrowsePath == null) { ExitLocalBrowse(); return; }
+            string? parent = GetLocalParentPath(_localBrowsePath);
+            if (parent == null) ExitLocalBrowse();
+            else EnterLocalBrowse(parent);
+        }
+
+        private void ExitLocalBrowse()
+        {
+            _localBrowsePath = null;
+            LocalFilesListBox.ItemsSource = _localFiles;
+            LocalFilesHeader.Text = "📁 Local Files";
+            LocalBrowseBackBtn.IsVisible = false;
+        }
+
+        private void LocalBrowseBack_Click(object? sender, RoutedEventArgs e) => LocalBrowseUp();
+
+        private static string? GetLocalParentPath(string path)
+        {
+            if (LocalIo.IsUnc(path))
+            {
+                string p = NasManager.Normalize(path).TrimEnd('\\');
+                string root = NasManager.ShareRoot(p);
+                if (p.Length <= root.Length) return null;      // at share root → exit
+                return p.Substring(0, p.LastIndexOf('\\'));
+            }
+            string? parent = Path.GetDirectoryName(path.TrimEnd('\\', '/'));
+            return string.IsNullOrEmpty(parent) ? null : parent;
+        }
+
+        private void ClearLocalFiles_Click(object? sender, RoutedEventArgs e)
+        {
+            _localFiles.Clear();
+            if (_localBrowsePath != null) ExitLocalBrowse();
+        }
 
         private void LocalFilesListBox_DragOver(object? sender, DragEventArgs e) => e.DragEffects = DragDropEffects.Copy;
 
@@ -410,6 +498,7 @@ namespace PS5Upload
                     }
                 }
             }
+            if (_localBrowsePath != null) ExitLocalBrowse();
         }
 
         // ============================================================
@@ -426,8 +515,20 @@ namespace PS5Upload
                 string tempDir = Path.Combine(Path.GetTempPath(), "ps5suite_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(tempDir);
                 
-                // Extract ZIP
-                await Task.Run(() => System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, tempDir));
+                // Extract ZIP — stream-based so NAS-sourced archives work too
+                await Task.Run(() =>
+                {
+                    if (LocalIo.IsUnc(zipPath) && NasManager.HasSession(zipPath))
+                    {
+                        using var zs = LocalIo.OpenRead(zipPath);
+                        using var za = new System.IO.Compression.ZipArchive(zs, System.IO.Compression.ZipArchiveMode.Read);
+                        za.ExtractToDirectory(tempDir);
+                    }
+                    else
+                    {
+                        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, tempDir);
+                    }
+                });
                 
                 // Add all extracted files
                 var files = Directory.GetFiles(tempDir, "*", SearchOption.AllDirectories);
@@ -452,8 +553,8 @@ namespace PS5Upload
             {
                 Log($"❌ Failed to extract ZIP: {ex.Message}");
                 // Fall back to adding the zip file itself
-                FileInfo info = new FileInfo(zipPath);
-                _localFiles.Add(new LocalFileItem { Name = info.Name, FullPath = zipPath, Icon = "📄", IsDirectory = false, Size = info.Length });
+                long sz = LocalIo.GetLength(zipPath);
+                _localFiles.Add(new LocalFileItem { Name = LocalIo.GetName(zipPath), FullPath = zipPath, Icon = "📄", IsDirectory = false, Size = sz });
             }
         }
 
@@ -480,25 +581,74 @@ namespace PS5Upload
         }
 
         // ============================================================
-        // NAS/SMB SUPPORT (ps5upload-style)
-        // Adds network paths (\\server\share\folder) to upload queue
+        // NAS/SMB SUPPORT (managed SMB via SMBLibrary — works on
+        // Windows/Linux/macOS/Android with explicit credentials)
         // ============================================================
         private async void AddNasPath_Click(object? sender, RoutedEventArgs e)
         {
             try
             {
-                string? nasPath = await ShowInputDialogAsync(
-                    "Add NAS/Network Path", 
-                    "Enter UNC path (\\\\server\\share\\folder):",
-                    "\\\\NAS\\games");
-                
-                if (string.IsNullOrWhiteSpace(nasPath)) return;
-                
-                nasPath = nasPath.Trim();
-                
-                // Validate UNC path format
-                if (!nasPath.StartsWith("\\\\") && !nasPath.StartsWith("//"))
+                // Saved connections → quick picker (or "New" for the full dialog).
+                if (_nasSaved.Count > 0)
                 {
+                    var pick = await ShowNasPickerAsync();
+                    if (pick == null) return;
+                    if (!ReferenceEquals(pick, _nasNewSentinel))
+                    {
+                        try
+                        {
+                            if (!NasManager.HasSession(pick.Path))
+                            {
+                                Log($"🔐 Reconnecting to \\\\{pick.Server}\\{pick.Share}...");
+                                string pass = NasManager.DecodePass(pick.PassEnc);
+                                await Task.Run(() => NasManager.Connect(pick.Server, pick.Share, pick.User, pass));
+                                Log($"✅ Connected to \\\\{pick.Server}\\{pick.Share}");
+                            }
+                            AddNasItem(NasManager.Normalize(pick.Path));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"❌ Saved NAS connection failed: {ex.Message}");
+                            await ShowMessageAsync($"Saved connection failed:\n{ex.Message}\n\nUse ➕ New to enter different credentials.", "Connection Failed");
+                        }
+                        return;
+                    }
+                }
+
+                var input = await ShowNasDialogAsync();
+                if (input == null || string.IsNullOrWhiteSpace(input.Value.path)) return;
+
+                string nasPath = NasManager.Normalize(input.Value.path);
+
+                if (!NasManager.TrySplit(nasPath, out string server, out string share, out _))
+                {
+                    // "\\host" with no share — try to list the host's shares
+                    // via OS tools so the user sees what's available.
+                    string bare = nasPath.TrimEnd('\\');
+                    if (NasManager.IsUncPath(bare) && bare.Count(c => c == '\\') == 2)
+                    {
+                        string host = bare.TrimStart('\\');
+                        Log($"🌐 Querying shares on \\\\{host}...");
+                        var shares = await Task.Run(() => NasManager.EnumerateSharesOs(host, input.Value.user, input.Value.pass));
+                        if (shares != null)
+                        {
+                            await ShowMessageAsync(
+                                $"\\\\{host} is reachable — pick a share and add it to the path.\n\n" +
+                                "Shares found:\n  " + string.Join("\n  ", shares.Select(s => $"\\\\{host}\\{s}")) +
+                                "\n\nExample: \\\\" + host + "\\" + shares[0],
+                                "Select a Share");
+                        }
+                        else
+                        {
+                            await ShowMessageAsync(
+                                $"The path \\\\{host} is missing the share name.\n\n" +
+                                "SMB connects to a share, not a host:\n" +
+                                "  \\\\host\\share\\folder\n\n" +
+                                "Couldn't enumerate shares automatically — check your NAS admin page for share names.",
+                                "Share Name Required");
+                        }
+                        return;
+                    }
                     await ShowMessageAsync(
                         "Invalid path format.\n\n" +
                         "Use UNC format: \\\\server\\share\\folder\n" +
@@ -506,49 +656,104 @@ namespace PS5Upload
                         "Invalid Path");
                     return;
                 }
-                
-                // Normalize path (convert // to \\ for Windows)
-                if (nasPath.StartsWith("//"))
+
+                // Establish/reuse the authenticated session for this share.
+                if (!NasManager.HasSession(nasPath))
                 {
-                    nasPath = "\\\\" + nasPath.Substring(2).Replace("/", "\\");
-                }
-                
-                Log($"🌐 Checking NAS path: {nasPath}");
-                
-                // Check if path exists
-                if (Directory.Exists(nasPath))
-                {
-                    // It's a directory - add it
-                    DirectoryInfo dirInfo = new DirectoryInfo(nasPath);
-                    _localFiles.Add(new LocalFileItem { 
-                        Name = dirInfo.Name, 
-                        FullPath = nasPath, 
-                        Icon = "🌐", 
-                        IsDirectory = true, 
-                        Size = 0 
-                    });
-                    Log($"✅ Added NAS folder: {dirInfo.Name} ({nasPath})");
-                }
-                else if (File.Exists(nasPath))
-                {
-                    // It's a file - add it
-                    FileInfo fileInfo = new FileInfo(nasPath);
-                    
-                    // Check if it's a ZIP file
-                    if (fileInfo.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase))
+                    // No creds entered → a Windows-authenticated share may work
+                    // via System.IO; otherwise try guest, then ask to retry.
+                    if (string.IsNullOrEmpty(input.Value.user))
                     {
-                        await ExtractAndAddZipContents(nasPath, fileInfo.Name);
+                        if (Directory.Exists(nasPath) || File.Exists(nasPath))
+                        {
+                            Log($"🌐 NAS path accessible via OS session (no SMB login needed)");
+                            AddNasItem(nasPath);
+                            return;
+                        }
+                    }
+
+                    Log($"🔐 Connecting to \\\\{server}\\{share}...");
+                    try
+                    {
+                        await Task.Run(() => NasManager.Connect(server, share, input.Value.user, input.Value.pass));
+                        Log(input.Value.user.Length > 0
+                            ? $"✅ Connected to \\\\{server}\\{share} as {input.Value.user}"
+                            : $"✅ Connected to \\\\{server}\\{share} (guest)");
+
+                        // Optional persistence — path + creds for next launch.
+                        if (input.Value.remember)
+                        {
+                            var existing = _nasSaved.FindIndex(c => c.Path.Equals(nasPath, StringComparison.OrdinalIgnoreCase));
+                            var saved = new NasManager.SavedConnection
+                            {
+                                Path = nasPath, Server = server, Share = share,
+                                User = input.Value.user, PassEnc = NasManager.EncodePass(input.Value.pass)
+                            };
+                            if (existing >= 0) _nasSaved[existing] = saved; else _nasSaved.Add(saved);
+                            SaveNasConnections();
+                            Log($"💾 Saved NAS connection: {nasPath}");
+                        }
+                    }
+                    catch (NasManager.NasAuthException ex)
+                    {
+                        Log($"🔒 NAS auth failed: {ex.Message}");
+                        await ShowMessageAsync($"{ex.Message}\n\nRe-open the NAS dialog and enter the share's username/password.", "Authentication Failed");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"❌ NAS connect failed: {ex.Message}");
+                        await ShowMessageAsync($"Cannot connect to \\\\{server}\\{share}:\n{ex.Message}", "Connection Failed");
+                        return;
+                    }
+                }
+
+                Log($"🌐 Checking NAS path: {nasPath}");
+                AddNasItem(nasPath);
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ NAS error: {ex.Message}");
+                await ShowMessageAsync($"Error accessing NAS path: {ex.Message}", "Error");
+            }
+        }
+
+        /// Adds the NAS path (file or folder) to the upload queue — works via
+        /// the SMB session when present, or the OS's own share session.
+        private async void AddNasItem(string nasPath)
+        {
+            try
+            {
+                bool isDir, isFile;
+                long size = 0;
+                if (NasManager.HasSession(nasPath))
+                {
+                    var kind = NasManager.ExistsAsDir(nasPath);
+                    isDir = kind == true; isFile = kind == false;
+                    if (isFile) size = NasManager.GetLength(nasPath);
+                }
+                else
+                {
+                    isDir = Directory.Exists(nasPath); isFile = File.Exists(nasPath);
+                    if (isFile) size = new FileInfo(nasPath).Length;
+                }
+
+                string name = LocalIo.GetName(nasPath);
+                if (isDir)
+                {
+                    _localFiles.Add(new LocalFileItem { Name = name, FullPath = nasPath, Icon = "🌐", IsDirectory = true, Size = 0 });
+                    Log($"✅ Added NAS folder: {name} ({nasPath})");
+                }
+                else if (isFile)
+                {
+                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await ExtractAndAddZipContents(nasPath, name);
                     }
                     else
                     {
-                        _localFiles.Add(new LocalFileItem { 
-                            Name = fileInfo.Name, 
-                            FullPath = nasPath, 
-                            Icon = "🌐", 
-                            IsDirectory = false, 
-                            Size = fileInfo.Length 
-                        });
-                        Log($"✅ Added NAS file: {fileInfo.Name} ({FormatFileSize(fileInfo.Length)})");
+                        _localFiles.Add(new LocalFileItem { Name = name, FullPath = nasPath, Icon = "🌐", IsDirectory = false, Size = size });
+                        Log($"✅ Added NAS file: {name} ({FormatFileSize(size)})");
                     }
                 }
                 else

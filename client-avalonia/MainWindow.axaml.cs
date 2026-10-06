@@ -37,6 +37,10 @@ namespace PS5Upload
         private List<string> _favoritePaths = new();
         private const string FavoritesFileName = "ps5_favorites.json";
 
+        // Saved NAS connections
+        private List<NasManager.SavedConnection> _nasSaved = new();
+        private const string NasFileName = "ps5_nas_connections.json";
+
         // Transfer History
         private ObservableCollection<TransferHistoryItem> _completedTransfers = new();
         private ObservableCollection<TransferHistoryItem> _failedTransfers = new();
@@ -171,6 +175,7 @@ namespace PS5Upload
             Log("Application started");
             LoadProfiles();
             LoadFavorites();
+            LoadNasConnections();
             LoadSettings();
 
             if (AutoSendPayloadCheckBox != null) AutoSendPayloadCheckBox.IsChecked = _autoSendPayload;
@@ -254,6 +259,155 @@ namespace PS5Upload
             grid.Children.Add(textBox);
             grid.Children.Add(buttonPanel);
             dlg.Content = grid;
+            await dlg.ShowDialog(this);
+            return result;
+        }
+
+        /// NAS connect dialog: UNC path + optional credentials + LAN discovery
+        /// + optional "remember this connection" save.
+        /// Returns null on cancel; empty user = guest/anonymous attempt.
+        private async Task<(string path, string user, string pass, bool remember)?> ShowNasDialogAsync()
+        {
+            (string, string, string, bool)? result = null;
+            var dlg = new Window
+            {
+                Title = "Add NAS / Network Share", Width = 440, Height = 510,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30))
+            };
+            var panel = new StackPanel { Margin = new Thickness(20), Spacing = 6 };
+            var pathBox = new TextBox { Text = "\\\\NAS\\share\\folder", Margin = new Thickness(0, 0, 0, 8) };
+
+            // --- Discovery row ---
+            var scanRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+            var scanBtn = new Button { Content = "🔍 Find NAS on LAN", Padding = new Thickness(10, 4) };
+            var scanStatus = new TextBlock { Text = "", Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)), FontSize = 11, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+            scanRow.Children.Add(scanBtn);
+            scanRow.Children.Add(scanStatus);
+            panel.Children.Add(scanRow);
+
+            var hostList = new ListBox
+            {
+                Height = 80, IsVisible = false,
+                Background = new SolidColorBrush(Color.FromRgb(20, 20, 20)),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var foundHosts = new List<NasManager.NasHost>();
+            hostList.SelectionChanged += (s, ev) =>
+            {
+                if (hostList.SelectedIndex >= 0 && hostList.SelectedIndex < foundHosts.Count)
+                    pathBox.Text = "\\\\" + foundHosts[hostList.SelectedIndex].Ip + "\\";
+            };
+            panel.Children.Add(hostList);
+
+            scanBtn.Click += async (s, ev) =>
+            {
+                scanBtn.IsEnabled = false;
+                scanStatus.Text = "Scanning LAN…";
+                hostList.IsVisible = false;
+                try
+                {
+                    foundHosts.Clear();
+                    foundHosts.AddRange(await NasManager.DiscoverAsync());
+                    var items = new Avalonia.Controls.ItemsControl();
+                    var strings = new System.Collections.ObjectModel.ObservableCollection<string>(foundHosts.Select(h => h.Display));
+                    hostList.ItemsSource = strings;
+                    hostList.IsVisible = strings.Count > 0;
+                    scanStatus.Text = strings.Count == 0 ? "No SMB hosts found" : $"{strings.Count} host(s) — pick one:";
+                }
+                catch (Exception ex) { scanStatus.Text = "Scan failed: " + ex.Message; }
+                scanBtn.IsEnabled = true;
+            };
+
+            panel.Children.Add(new TextBlock { Text = "UNC path:", Foreground = Brushes.White });
+            panel.Children.Add(pathBox);
+
+            panel.Children.Add(new TextBlock { Text = "Username (leave empty for guest):", Foreground = Brushes.White });
+            var userBox = new TextBox { PlaceholderText = "e.g. admin or WORKGROUP\\user", Margin = new Thickness(0, 0, 0, 8) };
+            panel.Children.Add(userBox);
+
+            panel.Children.Add(new TextBlock { Text = "Password:", Foreground = Brushes.White });
+            var passBox = new TextBox { PasswordChar = '●', Margin = new Thickness(0, 0, 0, 8) };
+            panel.Children.Add(passBox);
+
+            var rememberBox = new CheckBox { Content = "💾 Remember this connection", Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 6) };
+            panel.Children.Add(rememberBox);
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Saved connections reappear when you press NAS.\nPassword is stored locally on this PC only (obfuscated, not encrypted).",
+                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                FontSize = 11, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var btnPanel = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Spacing = 10 };
+            var okBtn = new Button { Content = "Connect", Width = 90, IsDefault = true };
+            okBtn.Click += (s, ev) => { result = (pathBox.Text ?? "", userBox.Text ?? "", passBox.Text ?? "", rememberBox.IsChecked == true); dlg.Close(); };
+            var cancelBtn = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+            cancelBtn.Click += (s, ev) => dlg.Close();
+            btnPanel.Children.Add(okBtn);
+            btnPanel.Children.Add(cancelBtn);
+            panel.Children.Add(btnPanel);
+
+            dlg.Content = panel;
+            await dlg.ShowDialog(this);
+            return result;
+        }
+
+        /// Picker shown when saved NAS connections exist.
+        /// Returns the chosen connection, the sentinel for "new connection", or null.
+        private static readonly NasManager.SavedConnection _nasNewSentinel = new() { Path = "__new__" };
+        private async Task<NasManager.SavedConnection?> ShowNasPickerAsync()
+        {
+            NasManager.SavedConnection? result = null;
+            var dlg = new Window
+            {
+                Title = "NAS Connections", Width = 460, Height = 330,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30))
+            };
+            var panel = new StackPanel { Margin = new Thickness(15), Spacing = 8 };
+
+            panel.Children.Add(new TextBlock { Text = "Saved connections:", Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 4) });
+            var list = new ListBox
+            {
+                Height = 170,
+                Background = new SolidColorBrush(Color.FromRgb(20, 20, 20)),
+                ItemsSource = new ObservableCollection<string>(_nasSaved.Select(c => c.Display))
+            };
+            list.SelectedIndex = 0;
+            panel.Children.Add(list);
+
+            var btnPanel = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, Spacing = 10 };
+            var connBtn = new Button { Content = "🔌 Connect", Width = 100, IsDefault = true };
+            var newBtn = new Button { Content = "➕ New…", Width = 90 };
+            var delBtn = new Button { Content = "🗑️ Delete", Width = 90 };
+            var cancelBtn = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+
+            connBtn.Click += (s, ev) => { if (list.SelectedIndex >= 0 && list.SelectedIndex < _nasSaved.Count) result = _nasSaved[list.SelectedIndex]; dlg.Close(); };
+            newBtn.Click += (s, ev) => { result = _nasNewSentinel; dlg.Close(); };
+            delBtn.Click += (s, ev) =>
+            {
+                if (list.SelectedIndex >= 0 && list.SelectedIndex < _nasSaved.Count)
+                {
+                    _nasSaved.RemoveAt(list.SelectedIndex);
+                    SaveNasConnections();
+                    list.ItemsSource = new ObservableCollection<string>(_nasSaved.Select(c => c.Display));
+                    if (_nasSaved.Count == 0) { result = _nasNewSentinel; dlg.Close(); }
+                }
+            };
+            cancelBtn.Click += (s, ev) => dlg.Close();
+
+            // Double-click a saved entry = Connect
+            list.DoubleTapped += (s, ev) => { if (list.SelectedIndex >= 0 && list.SelectedIndex < _nasSaved.Count) { result = _nasSaved[list.SelectedIndex]; dlg.Close(); } };
+
+            btnPanel.Children.Add(connBtn);
+            btnPanel.Children.Add(newBtn);
+            btnPanel.Children.Add(delBtn);
+            btnPanel.Children.Add(cancelBtn);
+            panel.Children.Add(btnPanel);
+            dlg.Content = panel;
             await dlg.ShowDialog(this);
             return result;
         }
@@ -360,11 +514,20 @@ namespace PS5Upload
             Interlocked.Exchange(ref _lastLogFlushTicks, DateTime.Now.Ticks);
             Dispatcher.UIThread.Post(() =>
             {
+                int caret = LogTextBox.CaretIndex;
                 string t = (LogTextBox.Text ?? "") + chunk;
+                int trimmed = 0;
                 if (t.Length > MaxLogChars)
-                    t = t.Substring(t.Length - MaxLogChars);
+                {
+                    trimmed = t.Length - MaxLogChars;
+                    t = t.Substring(trimmed);
+                }
                 LogTextBox.Text = t;
-                LogTextBox.CaretIndex = t.Length;
+                // Auto-scroll: jump to the end; otherwise keep the user's
+                // scroll position (caret tracks what they're reading).
+                LogTextBox.CaretIndex = (LogAutoScroll.IsChecked == true)
+                    ? t.Length
+                    : Math.Clamp(caret - trimmed, 0, t.Length);
             });
         }
 
