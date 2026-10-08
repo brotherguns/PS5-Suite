@@ -26,7 +26,8 @@ public partial class AppDelegate : AvaloniaAppDelegate<App>
         {
             try
             {
-                if (NSUrl.TryParse(url, out var nsUrl))
+                var nsUrl = NSUrl.FromString(url);
+                if (nsUrl is not null)
                     UIApplication.SharedApplication.OpenUrl(nsUrl);
             }
             catch { }
