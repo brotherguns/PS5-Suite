@@ -1,0 +1,87 @@
+# Builds an unsigned PS5 Suite .ipa on every push to main involving the
+# client, on demand, and for releases. No paid Apple Developer account needed:
+# the IPA is packaged without code signing — install it with TrollStore,
+# Sideloadly or AltStore (which re-sign on install).
+#
+# Version parity is manual: bump ApplicationDisplayVersion/ApplicationVersion in
+#   client-android/PS5SuiteAndroid.iOS/PS5SuiteAndroid.iOS.csproj
+# together with CFBundleShortVersionString/CFBundleVersion in
+#   client-android/PS5SuiteAndroid.iOS/Info.plist
+# (currently 7.2.4 / 8, matching the Android head).
+
+name: iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client-android/**'
+      - '.github/workflows/ios-ipa.yml'
+  pull_request:
+    paths:
+      - 'client-android/**'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: client-android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install iOS workload
+        run: dotnet workload install ios
+
+      - name: Restore
+        run: dotnet restore PS5SuiteAndroid.iOS/PS5SuiteAndroid.iOS.csproj
+
+      - name: Publish unsigned .app
+        run: >
+          dotnet publish PS5SuiteAndroid.iOS/PS5SuiteAndroid.iOS.csproj
+          -f net10.0-ios -c Release
+          -p:EnableCodeSigning=false -p:CodesignKey= -p:CodesignProvision=
+          -p:ContinuousIntegrationBuild=true
+          -o publish
+
+      - name: Package unsigned IPA
+        run: |
+          APP=$(find publish -maxdepth 2 -name '*.app' | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "No .app found under publish/:" >&2
+            find publish -maxdepth 3 >&2 || true
+            exit 1
+          fi
+          echo "Packaging $APP"
+          rm -rf Payload PS5Suite.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          # -y keeps symlinks (Frameworks) intact, -X strips extra attrs
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload PS5Suite.ipa
+          ls -lh PS5Suite.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PS5Suite-iOS-unsigned
+          path: client-android/PS5Suite.ipa
+          if-no-files-found: error
+
+      - name: Attach IPA to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client-android/PS5Suite.ipa

@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!-- Required on iOS 14+ for UDP broadcast auto-discovery (🔍) of the PS5 on the LAN.
+	     NOTE: this entitlement needs manual Apple approval for App Store distribution;
+	     it works fine for ad-hoc / TrollStore / Sideloadly installs built by CI. -->
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
 </plist>
