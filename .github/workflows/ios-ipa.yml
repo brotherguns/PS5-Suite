@@ -78,18 +78,26 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          APP=$(find publish -maxdepth 2 -name '*.app' | head -n 1)
-          if [ -z "$APP" ]; then
-            echo "No .app found under publish/:" >&2
-            find publish -maxdepth 3 >&2 || true
-            exit 1
+          # dotnet publish already emits an (unsigned) .ipa for iOS projects.
+          # Only fall back to manual Payload/*.app packaging if it didn't.
+          if ls publish/*.ipa >/dev/null 2>&1; then
+            IPA=$(ls publish/*.ipa | head -n 1)
+            echo "Using publish-produced $IPA"
+            cp "$IPA" PS5Suite.ipa
+          else
+            APP=$(find publish -maxdepth 2 -name '*.app' | head -n 1)
+            if [ -z "$APP" ]; then
+              echo "No .app or .ipa found under publish/:" >&2
+              find publish -maxdepth 3 >&2 || true
+              exit 1
+            fi
+            echo "Packaging $APP"
+            rm -rf Payload PS5Suite.ipa
+            mkdir Payload
+            cp -R "$APP" Payload/
+            # --sequesterRsrc keeps symlinks (Frameworks) intact
+            /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload PS5Suite.ipa
           fi
-          echo "Packaging $APP"
-          rm -rf Payload PS5Suite.ipa
-          mkdir Payload
-          cp -R "$APP" Payload/
-          # -y keeps symlinks (Frameworks) intact, -X strips extra attrs
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload PS5Suite.ipa
           ls -lh PS5Suite.ipa
 
       - name: Upload IPA artifact

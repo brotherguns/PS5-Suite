@@ -21,7 +21,7 @@ public class Application
             {
                 var nsUrl = NSUrl.FromString(url);
                 if (nsUrl is not null)
-                    UIApplication.SharedApplication.OpenUrl(nsUrl);
+                    UIApplication.SharedApplication.OpenUrl(nsUrl, new NSDictionary(), null);
             }
             catch { }
         };
