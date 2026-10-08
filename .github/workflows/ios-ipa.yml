@@ -45,10 +45,15 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # Pinned: 10.0.100's bundled iOS manifests target Xcode 26 (Xcode 27
+          # is not on runners yet). Keep in sync with global.json.
+          dotnet-version: '10.0.100'
 
       - name: Install iOS workload
-        run: dotnet workload install ios
+        # --skip-manifest-update keeps the iOS SDK bundled with 10.0.100
+        # (26.x, works with runner Xcode 26.x) instead of updating to the
+        # latest manifest (27.x, needs Xcode 27).
+        run: dotnet workload install ios --skip-manifest-update
 
       - name: Restore
         run: dotnet restore PS5SuiteAndroid.iOS/PS5SuiteAndroid.iOS.csproj
